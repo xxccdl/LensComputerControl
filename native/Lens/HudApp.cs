@@ -215,7 +215,7 @@ namespace Lens
         {
             ReadState();
 
-            bool want = lastTs > 0 && (NowMs() - lastTs) < 3500;
+            bool want = lastTs > 0 && (NowMs() - lastTs) < 2800;
             targetAlpha = want ? 1.0 : 0.0;
             alpha += (targetAlpha - alpha) * 0.22;
             if (alpha < 0.01) alpha = 0;
@@ -299,11 +299,11 @@ namespace Lens
                     using (var path = Round(rr, r))
                     {
                         // 纯黑底：几乎不透，只有一点点让蓝边透出来
-                        using (var bg = new SolidBrush(Color.FromArgb((int)(248 * alpha), 0, 0, 0)))
+                        using (var bg = new SolidBrush(Color.FromArgb((int)(232 * alpha), 0, 0, 0)))
                             g.FillPath(bg, path);
 
                         // 描边：沿胶囊走向的蓝色渐变
-                        using (var pen = new Pen(Color.FromArgb((int)(210 * alpha), 56, 140, 248), 1.4f))
+                        using (var pen = new Pen(Color.FromArgb((int)(180 * alpha), 56, 140, 248), 1.4f))
                             g.DrawPath(pen, path);
 
                         // 纯黑底上不加高光，保持干净

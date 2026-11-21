@@ -1633,6 +1633,9 @@ namespace Lens
                 int vx = Win32.GetSystemMetrics(76), vy = Win32.GetSystemMetrics(77);
                 int vw = Win32.GetSystemMetrics(78), vh = Win32.GetSystemMetrics(79);
                 if (vw <= 0 || vh <= 0) { vx = 0; vy = 0; vw = Win32.GetSystemMetrics(0); vh = Win32.GetSystemMetrics(1); }
+                // --rect：只截这一块（屏幕物理坐标）。没有这一步，调用方传了区域仍拿整屏图，换算全错。
+                int oX = vx, oY = vy, oW = vw, oH = vh;
+                string dRect = Arg(a, "--rect", null);
                 using (var bmp = new Bitmap(vw, vh, PixelFormat.Format32bppArgb))
                 {
                     using (var g = Graphics.FromImage(bmp))
@@ -1643,10 +1646,34 @@ namespace Lens
                         Win32.ReleaseDC(IntPtr.Zero, src);
                         g.ReleaseHdc(dst);
                     }
-                    bmp.Save(outp, ImageFormat.Png);
+                    Bitmap toSave = bmp;
+                    Bitmap piece = null;
+                    if (!string.IsNullOrEmpty(dRect))
+                    {
+                        string[] rp = dRect.Split(',');
+                        int rx, ry, rw, rh;
+                        if (rp.Length == 4 && int.TryParse(rp[0], out rx) && int.TryParse(rp[1], out ry)
+                            && int.TryParse(rp[2], out rw) && int.TryParse(rp[3], out rh) && rw > 0 && rh > 0)
+                        {
+                            int cx = rx - vx, cy = ry - vy;
+                            int cw = rw, ch = rh;
+                            if (cx < 0) { cw += cx; cx = 0; }
+                            if (cy < 0) { ch += cy; cy = 0; }
+                            if (cx + cw > vw) cw = vw - cx;
+                            if (cy + ch > vh) ch = vh - cy;
+                            if (cw > 0 && ch > 0)
+                            {
+                                piece = bmp.Clone(new Rectangle(cx, cy, cw, ch), PixelFormat.Format32bppArgb);
+                                toSave = piece;
+                                oX = rx; oY = ry; oW = cw; oH = ch;
+                            }
+                        }
+                    }
+                    toSave.Save(outp, ImageFormat.Png);
+                    if (piece != null) piece.Dispose();
                 }
                 Console.Write("{\"ok\":true,\"file\":" + Json.Str(Path.GetFullPath(outp))
-                    + ",\"w\":" + vw + ",\"h\":" + vh + ",\"x\":" + vx + ",\"y\":" + vy + ",\"method\":\"desktop\"}");
+                    + ",\"w\":" + oW + ",\"h\":" + oH + ",\"x\":" + oX + ",\"y\":" + oY + ",\"method\":\"desktop\"}");
                 return 0;
             }
 
@@ -1666,11 +1693,43 @@ namespace Lens
                 img.Dispose();
                 img = cropped;
             }
+            // --rect x,y,w,h（屏幕物理坐标）：只截这一块。
+            // 之前 cap 完全忽略 --rect，调用方传了区域仍拿整窗图，图内像素与屏幕坐标的换算因此全错。
+            int outX = wi.Frame.X, outY = wi.Frame.Y;
+            string rectArg = Arg(a, "--rect", null);
+            if (!string.IsNullOrEmpty(rectArg))
+            {
+                string[] rp = rectArg.Split(',');
+                int rx, ry, rw, rh;
+                if (rp.Length == 4 && int.TryParse(rp[0], out rx) && int.TryParse(rp[1], out ry)
+                    && int.TryParse(rp[2], out rw) && int.TryParse(rp[3], out rh) && rw > 0 && rh > 0)
+                {
+                    // 窗口图是内容裁剪后的，先算出内容原点在屏幕上的位置，再换算到图内坐标
+                    int originX = wi.Frame.X + (img.Width - wi.Frame.W > 0 ? 0 : 0);
+                    int cx = rx - originX, cy = ry - wi.Frame.Y;
+                    int cw = Math.Min(rw, img.Width - cx), ch = Math.Min(rh, img.Height - cy);
+                    if (cx < 0) { cw += cx; cx = 0; }
+                    if (cy < 0) { ch += cy; cy = 0; }
+                    if (cw > 0 && ch > 0)
+                    {
+                        var piece = img.Clone(new Rectangle(cx, cy, cw, ch), PixelFormat.Format32bppArgb);
+                        img.Dispose();
+                        img = piece;
+                        outX = rx; outY = ry;
+                    }
+                    else
+                    {
+                        Console.Write("{\"ok\":false,\"code\":\"RECT_OUTSIDE\",\"message\":\"requested rect is outside the captured image\",\"window\":" + wi.ToJson() + "}");
+                        img.Dispose();
+                        return 2;
+                    }
+                }
+            }
             img.Save(outp, ImageFormat.Png);
             int w = img.Width, h = img.Height;
             img.Dispose();
             Console.Write("{\"ok\":true,\"file\":" + Json.Str(Path.GetFullPath(outp)) + ",\"w\":" + w + ",\"h\":" + h
-                + ",\"x\":" + wi.Frame.X + ",\"y\":" + wi.Frame.Y
+                + ",\"x\":" + outX + ",\"y\":" + outY
                 + ",\"method\":" + Json.Str(method) + ",\"window\":" + wi.ToJson() + "}");
             return 0;
         }

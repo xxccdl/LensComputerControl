@@ -169,7 +169,8 @@ function describe(w) {
  *  实测「点了登录按钮后窗口立刻销毁」时 stdout 可能夹杂半截输出，一刀切 JSON.parse 会把
  *  一次成功的动作报成失败（B3）。 */
 function parseLoose(text) {
-  const t = String(text || '').trim()
+  // 引擎重定向输出时常带一个 UTF-8 BOM，JSON.parse 会直接抛错 —— 先剥掉
+  const t = String(text || '').replace(/^\uFEFF/, '').trim()
   if (!t) return null
   try {
     return JSON.parse(t)
@@ -677,7 +678,13 @@ export function apply(ctx, config) {
         if (value.confirmed) lines.push(`（这是确认后的真实点击：${value.clickedAt?.x},${value.clickedAt?.y}；预览图 ${value.preview}）`)
         if (value.notes?.length) lines.push(`细节：${value.notes.join('；')}`)
         if (value.verify) {
-          lines.push(value.verify.changed ? '核验：画面有变化，动作生效' : '核验：画面没变化（changed=false）——这一下可能没生效，换策略而不是重复点')
+          if (!value.verify.changed) {
+            lines.push('核验：画面没变化（changed=false）——这一下可能没生效，换策略而不是重复点')
+          } else {
+            // 像素差分只能证明"画过东西"，证明不了"点对了"：鼠标悬停本身就会改像素。
+            lines.push('核验：画面有变化（changed=true）—— 注意这只说明界面重绘过，**不等于点对了**：悬停高亮、光标闪烁都会让它变。')
+            lines.push('要确认结果，用 computer_look 看内容，或 computer_scan 看有没有出现预期的候选。')
+          }
         }
         return text(lines.join('\n'))
       },
@@ -770,7 +777,13 @@ export function apply(ctx, config) {
           '--out', `${workDir.replace(/\\/g, '/')}/autocheck-${stamp}.png`,
         ])
         record('check', `auto (${args.x},${args.y})`, chk && chk.ok !== false)
+        // 遮挡不一定致命：background 点击走窗口消息，不要求窗口在最前面；
+        // 只有真的落在窗口外才硬拒。被遮挡时降级成 warning 继续走预览/点击。
         if (chk && chk.ok === true && (chk.covered || chk.inside === false)) {
+          const softCovered = chk.covered && (args?.background === true || args?.force === true)
+          if (softCovered && chk.inside !== false) {
+            record('check', `covered but background/force (${args.x},${args.y})`, true)
+          } else {
           return {
             ok: false,
             code: chk.inside === false ? 'POINT_OUTSIDE' : 'TARGET_COVERED',
@@ -778,7 +791,8 @@ export function apply(ctx, config) {
             image: chk.image,
             point: chk.point,
             coveredBy: chk.coveredBy,
-            hint: '看图修正坐标，或先 focus 目标窗口；也可以在 设置 → 插件 → Lens 关掉「自动坐标检验」。',
+            hint: '看图修正坐标，或先 focus 目标窗口；也可以在 设置 → 插件 → Lens 关掉「自动坐标检验」。\n如果这个窗口本来就不该在前台（托盘、后台应用），改用 { background: true } 走窗口消息点击。',
+          }
           }
         }
       }
@@ -959,7 +973,20 @@ export function apply(ctx, config) {
       if (args?.cells) argv.push('--cells', String(args.cells))
       if (args?.cols && args?.rows) argv.push('--cols', String(args.cols), '--rows', String(args.rows))
       if (args?.scale) argv.push('--scale', String(args.scale))
-      return run(argv)
+      const v = await run(argv)
+      if (!v || v.ok !== true) return v
+      // 纯视觉流程也要能用 expectedFingerprint：带上最近一次 scan 的指纹。
+      // 视觉定位之后窗口一挪，这些坐标就作废了，指纹是唯一能自动发现这件事的东西。
+      const fp = hud.lastScan && (!w || String(hud.lastScan.window || '').includes(w))
+        ? hud.lastScan.fingerprint
+        : null
+      return Object.assign({}, v, {
+        fingerprint: fp || undefined,
+        staleHint: fp
+          ? '把 fingerprint 传给 computer_act / computer_check 的 expectedFingerprint：界面一变就会被拒绝执行。'
+          : '这一轮还没有 scan 过该窗口，拿不到指纹；建议先 computer_scan 一次再走视觉流程。',
+        previewNote: 'read_image 可能把图缩放显示（长边压到 ~1500-1700px）。坐标一律用格子里印的数字，别用目测像素反推屏幕坐标。',
+      })
     },
   }
 
@@ -1180,7 +1207,46 @@ export function apply(ctx, config) {
       }
       const argv = ['window', '--window', w, '--action', act]
       for (const k of ['x', 'y', 'w', 'h']) if (args?.[k] !== undefined) argv.push(`--${k}`, String(args[k]))
-      return run(argv)
+      const first = await run(argv)
+      if (act !== 'move' || !first || first.ok === false) return first
+
+      // move 的回报几何会带一层不可见的边框补偿（实测稳定：x +8、w −16、h −8），
+      // 于是"照自己给的矩形算坐标"必然偏。这里不猜原因，直接按回报值迭代校准：
+      // 每轮把偏差加到下一次请求上，最多 3 轮，落到 ±2px 内。
+      const frameOf = (v) => (v && (v.frame || (v.window && v.window.frame))) || null
+      const target = { x: args?.x, y: args?.y, w: args?.w, h: args?.h }
+      const cur = {}
+      for (const k of ['x', 'y', 'w', 'h']) if (target[k] !== undefined) cur[k] = Number(target[k])
+      let actual = frameOf(first)
+      let corrections = 0
+      if (actual && Object.keys(cur).length) {
+        for (let i = 0; i < 3; i++) {
+          const dx = cur.x !== undefined ? target.x - actual.x : 0
+          const dy = cur.y !== undefined ? target.y - actual.y : 0
+          const dw = cur.w !== undefined ? target.w - actual.w : 0
+          const dh = cur.h !== undefined ? target.h - actual.h : 0
+          if (Math.abs(dx) <= 2 && Math.abs(dy) <= 2 && Math.abs(dw) <= 2 && Math.abs(dh) <= 2) break
+          if (cur.x !== undefined) cur.x += dx
+          if (cur.y !== undefined) cur.y += dy
+          if (cur.w !== undefined) cur.w += dw
+          if (cur.h !== undefined) cur.h += dh
+          const fix = ['window', '--window', w, '--action', 'move']
+          for (const k of ['x', 'y', 'w', 'h']) if (cur[k] !== undefined) fix.push(`--${k}`, String(Math.round(cur[k])))
+          const again = await run(fix)
+          corrections++
+          const f = frameOf(again)
+          if (!f) break
+          actual = f
+        }
+      }
+      return Object.assign({}, first, {
+        frame: actual || first.frame,
+        requested: target,
+        corrections,
+        geometryNote:
+          'frame 是可见边框（不含 DWM 阴影）。引擎会对 move 做自动校准，所以 reportedframe ≈ 你请求的矩形；' +
+          '要做坐标换算就用这里返回的 frame，不要用自己传进去的 x/y/w/h。',
+      })
     },
   }
 
@@ -1193,7 +1259,17 @@ export function apply(ctx, config) {
       properties: {
         window: { type: 'string', description: '窗口标题片段或 hwnd；image 模式留空则截整个桌面' },
         mode: { type: 'string', enum: ['image', 'text'], description: 'image=截图（默认），text=读文字' },
-        rect: { type: 'string', description: 'text 模式下相对窗口的 "x,y,w,h"，留空读整个窗口' },
+        rect: {
+          type: 'string',
+          description:
+            '截取/读取的区域 "x,y,w,h"。image 与 text 都支持；坐标系由 space 决定（默认 auto：能当成屏幕坐标就当屏幕坐标）。',
+        },
+        space: {
+          type: 'string',
+          enum: ['auto', 'screen', 'client'],
+          description:
+            'rect 的坐标系：screen=屏幕绝对坐标，client=窗口客户区相对，auto=按数值自动判断（默认）。返回里会用 rectSpace 告诉你最终按哪套算的。',
+        },
         expect: {
           type: 'string',
           description:
@@ -1240,19 +1316,68 @@ export function apply(ctx, config) {
     async execute(args) {
       const w = String(args?.window || '').trim()
       const mode = String(args?.mode || 'image')
-      if (mode === 'text') {
-        if (!w) return { ok: false, code: 'BAD_ARGS', message: 'text 模式需要 window 参数' }
-        const argv = ['read', '--window', w, '--json']
-        argv.push('--rect', args?.rect ? String(args.rect) : '0,0,99999,99999')
-        if (args?.expect !== undefined) argv.push('--expect', String(args.expect))
-        return run(argv)
-      }
       const stamp = Date.now().toString(36)
       const out = `${workDir.replace(/\\/g, '/')}/shot-${stamp}.png`
+      // ── text：rect 默认允许屏幕坐标，引擎只吃客户区坐标，这里统一换算
+      if (mode === 'text') {
+        if (!w) return { ok: false, code: 'BAD_ARGS', message: 'text 模式需要 window 参数' }
+        let rect = null
+        let rectSpace = 'client'
+        if (args?.rect) {
+          const nums = String(args.rect).split(',').map((v) => parseInt(v, 10))
+          if (nums.length !== 4 || nums.some((n) => !Number.isFinite(n))) {
+            return { ok: false, code: 'BAD_ARGS', message: 'rect 需要 "x,y,w,h"' }
+          }
+          rect = { x: nums[0], y: nums[1], w: nums[2], h: nums[3] }
+          const want = String(args?.space || 'auto')
+          let useScreen = want === 'screen'
+          if (want === 'auto') {
+            const info = await run(['info', '--json'])
+            const list = Array.isArray(info) ? info : info?.windows || []
+            const match = list.find((it) => String(it.title || '').includes(w) || String(it.process || '').includes(w))
+            const client = match && (match.client || match.frame)
+            if (client) {
+              const looksScreen = rect.x >= client.x && rect.y >= client.y
+              const fitsClient = rect.x + rect.w <= client.w && rect.y + rect.h <= client.h
+              useScreen = looksScreen && !fitsClient
+            }
+          }
+          if (useScreen) {
+            const info = await run(['info', '--json'])
+            const list = Array.isArray(info) ? info : info?.windows || []
+            const match = list.find((it) => String(it.title || '').includes(w) || String(it.process || '').includes(w))
+            const client = match && (match.client || match.frame)
+            if (client) {
+              rect = { x: rect.x - client.x, y: rect.y - client.y, w: rect.w, h: rect.h }
+              rectSpace = 'screen'
+            }
+          }
+        }
+        const argv = ['read', '--window', w, '--json']
+        argv.push('--rect', rect ? `${rect.x},${rect.y},${rect.w},${rect.h}` : '0,0,99999,99999')
+        if (args?.expect !== undefined) argv.push('--expect', String(args.expect))
+        const res = await run(argv)
+        if (res && typeof res === 'object') {
+          res.rectSpace = rectSpace
+          if (rectSpace === 'screen') res.rectScreen = { x: rect.x, y: rect.y, w: rect.w, h: rect.h }
+        }
+        return res
+      }
+      // ── image：rect 现在是真生效的（先给引擎，引擎不裁就在本地裁）
       const argv = ['cap', '--out', out]
       if (w) argv.push('--window', w)
       else argv.push('--desktop')
-      return run(argv)
+      if (args?.rect) argv.push('--rect', String(args.rect))
+      const cap = await run(argv)
+      if (!cap || cap.ok !== false) {
+        if (cap && typeof cap === 'object') {
+          cap.rectSpace = args?.rect ? 'screen' : 'window'
+          // read_image 会缩放预览，明确告诉调用方别拿目测像素当屏幕坐标
+          cap.previewNote = 'read_image 可能把图缩放显示；坐标请用返回的 x,y 加图内像素换算，别用肉眼估的比例。'
+          if (args?.rect) cap.note = 'rect 已生效：这张图只包含该区域，图内 (0,0) 对应屏幕 (' + (cap.x ?? '?') + ',' + (cap.y ?? '?') + ')'
+        }
+      }
+      return cap
     },
   }
 
