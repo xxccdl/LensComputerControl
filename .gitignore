@@ -36,3 +36,6 @@ flows/
 obj/
 bin/obj/
 *.nuget.*
+
+# 专利申请材料（未提交前绝不能公开）
+patent/
