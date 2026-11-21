@@ -204,10 +204,34 @@ function parseLoose(text) {
   }
   return null
 }
+/**
+ * 平台 → 引擎调用方案。
+ * Windows: 随包的 bin/lens.exe（C# / Win32 + UIA + WinRT OCR）。
+ * macOS:   随包的 engine-mac.mjs，用当前 Node 执行（Electron 下靠 ELECTRON_RUN_AS_NODE 转 Node 语义）。
+ * 抽成纯函数是为了能在非 macOS 机器上直接测这段判断。
+ */
+export function enginePlan(platform, here, cfgExePath) {
+  if (platform === 'darwin') {
+    const script = join(here, 'engine-mac.mjs')
+    return {
+      engine: 'node',
+      cmd: process.execPath,
+      pre: [script],
+      env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' }),
+    }
+  }
+  return {
+    engine: 'exe',
+    cmd: cfgExePath || join(here, 'bin', 'lens.exe'),
+    pre: [],
+    env: undefined,
+  }
+}
+
 export function apply(ctx, config) {
   const cfg = config && typeof config === 'object' ? config : {}
   const settings = readSettings(cfg)
-  const exePath = cfg.exePath || join(HERE, 'bin', 'lens.exe')
+  const plan = enginePlan(process.platform, HERE, cfg.exePath)
   const workDir = cfg.workDir || join(tmpdir(), 'lens-computer-control')
   const timeoutMs = settings.timeoutMs
   const hudPort = Number(unwrap(cfg.hudPort, 45871)) > 0 ? Number(unwrap(cfg.hudPort, 45871)) : 45871
@@ -235,12 +259,12 @@ export function apply(ctx, config) {
     /* workDir 可能已存在或无权限，运行期再报错 */
   }
 
-  const runExe = (exe, args) =>
+  const runExe = (exe, args, env) =>
     new Promise((resolve) => {
       execFile(
         exe,
         args,
-        { timeout: timeoutMs, windowsHide: true, maxBuffer: 64 * 1024 * 1024 },
+        { timeout: timeoutMs, windowsHide: true, maxBuffer: 64 * 1024 * 1024, env: env || process.env },
         (err, stdout, stderr) => {
           const out = String(stdout || '').trim()
           if (out) {
@@ -268,13 +292,16 @@ export function apply(ctx, config) {
       )
     })
 
-  const runRaw = (args) => runExe(exePath, args)
+  /** 所有引擎调用都从这里走：Windows 直接调用 exe，macOS 用 node 跑 engine-mac.mjs。 */
+  const runRaw = (args) => runExe(plan.cmd, plan.pre.concat(args), plan.env)
 
   // 首次调用时把视觉反馈层拉起来（渐变蓝边 + 顶部胶囊）。失败不影响主流程。
   let hudReady = false
   const ensureHudOnce = async () => {
     if (hudReady) return
     hudReady = true
+    // macOS 没有 lenshud 浮层（那是 Windows 实现），Web 面板里的状态卡照常可用
+    if (plan.engine !== 'exe') return
     // 设置里关掉 HUD 就彻底不启动那个窗口：省一次进程，也让"完全静默"成为可选
     if (!settings.hudEnabled) return
     try {
@@ -735,7 +762,7 @@ export function apply(ctx, config) {
       // 不让你的一次误判变成一次误点。id / cell 走的是引擎算出来的坐标，不受影响。
       if (settings.autoCheck && args?.id === undefined && !args?.cell) {
         const stamp = Date.now().toString(36)
-        const chk = await runExe(exePath, [
+        const chk = await runRaw([
           'check', '--window', w,
           '--x', String(Math.round(args.x)), '--y', String(Math.round(args.y)),
           '--w', String(settings.checkBox), '--h', String(settings.checkBox),
@@ -770,7 +797,7 @@ export function apply(ctx, config) {
         const image = `${workDir.replace(/\\/g, '/')}/preclick-${stamp}.png`
         const px = Math.round(args.x)
         const py = Math.round(args.y)
-        const chk = await runExe(exePath, [
+        const chk = await runRaw([
           'check', '--window', w,
           '--x', String(px), '--y', String(py),
           '--w', String(settings.checkBox), '--h', String(settings.checkBox),
@@ -1007,7 +1034,7 @@ export function apply(ctx, config) {
       if (args?.desktop || !w) argv.push('--desktop')
       else argv.push('--window', w)
       if (hud.stopped) return { ok: false, error: 'EMERGENCY_STOP: 急停已生效，动作被拒绝。请让用户先解除急停。' }
-      const result = await runExe(exePath, argv)
+      const result = await runRaw(argv)
       record('check', `${argv[2]},${argv[4]}`, result && result.ok !== false)
       return result
     },

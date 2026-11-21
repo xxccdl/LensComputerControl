@@ -2,7 +2,7 @@
   "name": "dsh-lens-computer-control",
   "version": "0.9.0",
   "private": false,
-  "description": "零第三方依赖的 Windows 电脑控制引擎：多通道识别（UIA/OCR/实心色块/表格投影/文字网格/模板锚点），模型只选候选编号，坐标全部由本地引擎计算；支持坐标检验（绿框+放大镜自检）、拖动、人类化输入、批量填表、坐标网格、多步流程编排。",
+  "description": "零第三方依赖的电脑控制引擎（Windows 全功能 / macOS 实验性）：多通道识别（UIA/OCR/实心色块/表格投影/文字网格/模板锚点），模型只选候选编号，坐标全部由本地引擎计算；支持坐标检验（绿框+放大镜自检）、拖动、人类化输入、批量填表、坐标网格、多步流程编排。",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -15,6 +15,7 @@
     "ocr",
     "uiautomation",
     "self-drawn-ui",
+    "macos",
     "gui-agent"
   ],
   "author": "xxccdl",
@@ -29,7 +30,8 @@
   },
   "type": "module",
   "os": [
-    "win32"
+    "win32",
+    "darwin"
   ],
   "engines": {
     "node": ">=18"
@@ -44,6 +46,7 @@
   "files": [
     "index.js",
     "client.js",
+    "engine-mac.mjs",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",

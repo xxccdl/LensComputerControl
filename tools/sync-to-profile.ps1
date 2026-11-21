@@ -34,7 +34,7 @@ $stage = Join-Path $env:TEMP ('lens-pkg-stage-' + [guid]::NewGuid().ToString('N'
 New-Item -ItemType Directory -Path $stage | Out-Null
 try {
   $items = @('bin', 'examples', 'locale', 'native',
-             'index.js', 'client.js', 'cordis.patch.yml', 'package.json',
+             'index.js', 'client.js', 'engine-mac.mjs', 'cordis.patch.yml', 'package.json',
              'market.json', 'screenshots.json', 'icon.svg', 'README.md', 'LICENSE', '安装说明.md')
   foreach ($item in $items) {
     $src = Join-Path $Source $item

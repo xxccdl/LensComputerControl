@@ -1,8 +1,10 @@
 # Lens 电脑控制 / Lens Computer Control
 
-零第三方依赖的 Windows 桌面控制插件（DeepSeek Harness 插件）。引擎是随包分发的原生 `lens.exe`（C#，用系统自带 `csc.exe` 编译），只调用 Windows 自带的 Win32 / GDI+ / UIAutomation / WinRT OCR —— 不装 Python、不装 OpenCV、不拉任何 npm 依赖。
+零第三方依赖的桌面控制插件（DeepSeek Harness 插件）。Windows 用随包分发的原生 `lens.exe`（C#，用系统自带 `csc.exe` 编译），只调用系统自带的 Win32 / GDI+ / UIAutomation / WinRT OCR；**macOS 为实验性支持**，用随包的 `engine-mac.mjs` 调 `osascript`(JXA) / `screencapture` —— 不装 Python、不装 OpenCV、不拉任何 npm 依赖。
 
 **设计铁律：模型永远不输出绝对坐标。** 引擎把窗口扫成一张「候选表」并给每个目标编号，模型只说「点 #17」，坐标由引擎从候选框算出来 —— 把定位从回归问题降级成分类问题，误差归零。
+
+> **平台支持**：Windows 全功能；macOS 实验性（scan / check / click / type / key / paste / vision 切块可用，scroll / drag / 遮挡检测尚未实现，无 HUD 浮层，见文末「macOS 实验性支持」）。
 
 ## 三个关键能力
 
@@ -64,7 +66,8 @@ npm i dsh-lens-computer-control
 package.json       dsh.bundle + dsh.client 清单；cordis.patch.yml 在根
 index.js           工具层（computer_* 八个工具）
 client.js          HUD 浮层 + 设置面板
-bin/lens.exe       引擎二进制（随包分发，直接可用）
+engine-mac.mjs     macOS 引擎（Node，实验性；零依赖）
+bin/lens.exe       Windows 引擎二进制（随包分发，直接可用）
 bin/lenshud.exe    HUD 浮层进程
 native/            引擎源码快照（与 src/ 同步，方便在包里对照）
 src/               引擎 C# 源码（Program.cs 入口，Check.cs 坐标检验，Det/ 六个感知通道）
@@ -83,11 +86,40 @@ powershell -NoProfile -File tools/build-lens.ps1
 
 只需要系统自带的 `csc.exe`（.NET Framework 4.x）+ Windows SDK 的 `Windows.winmd`（WinRT OCR 用）。产物是 `bin/lens.exe` 与 `bin/lenshud.exe`。
 
+## macOS 实验性支持
+
+macOS 上没有 Win32/UIA，`lens.exe` 跑不了，于是另带一个**零依赖的 Node 引擎** `engine-mac.mjs`，`index.js` 按 `process.platform` 自动切换：
+
+| 能力 | Windows | macOS（实验性） |
+|---|---|---|
+| 窗口列表 `computer_windows` | Win32 枚举 | JXA / System Events |
+| 候选扫描 `computer_scan` | 六通道（uia/ocr/实心/表格/文字网格/模板） | **仅 AX 通道**（Accessibility 树），AX 为空时返回 L1 能力等级 |
+| 坐标检验 `computer_check` | GDI+ 绘制 | Node 内解 PNG + 画框 + 最近邻放大（自己实现编解码） |
+| 切块定位 `computer_vision` | 引擎绘制分格图 | 同样支持，`cells` 模式带编号与坐标 |
+| 点击 / 输入 / 按键 / 粘贴 | SendInput / PostMessage / 剪贴板 | System Events `click at`、`keystroke`、`pbcopy + cmd+v`（粘完写回原剪贴板） |
+| 滚动 / 拖动 / 遮挡检测 | ✔ | **未实现**，返回 `NOT_IMPLEMENTED` |
+| HUD 浮层（蓝边+胶囊） | `lenshud.exe` | 无（Web 面板状态卡照常） |
+
+启用步骤：
+
+1. 装好插件后，首次调用会触发系统授权弹窗；
+2. 到「系统设置 → 隐私与安全性」里给**宿主进程**（DSH Desktop / 终端）勾上 **辅助功能** 与 **屏幕录制**；
+3. 重启宿主，`computer_windows` 能列出窗口即接通。
+
+```bash
+# 也可以单独试引擎（不需要插件）
+node engine-mac.mjs info --json
+node engine-mac.mjs scan --window Safari --overlay /tmp/scan.png
+node engine-mac.mjs vision --mode cells --cells 9 --out /tmp/cells.png
+```
+
+已知限制：AX 树在 Electron / Qt / 游戏里通常为空，这类窗口只能靠 `computer_vision` 切块 + `computer_check` 预览；候选 id 点击暂未实现（用 scan 给的 `cx,cy`）。
+
 ## 已知限制
 
 - 反截屏窗口（`WDA_EXCLUDEFROMCAPTURE`）下截图全黑，只能做引导不能代点
 - AWT/Swing 窗口不响应后台 `PostMessage` 点击，必须前台真点击
-- 目前只支持 Windows
+- macOS 支持为实验性，能力矩阵见上一节
 
 ## 许可
 
