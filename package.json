@@ -17,8 +17,16 @@
     "self-drawn-ui",
     "gui-agent"
   ],
-  "author": "David",
+  "author": "xxccdl",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xxccdl/LensComputerControl.git"
+  },
+  "homepage": "https://github.com/xxccdl/LensComputerControl#readme",
+  "bugs": {
+    "url": "https://github.com/xxccdl/LensComputerControl/issues"
+  },
   "type": "module",
   "os": [
     "win32"
@@ -40,6 +48,7 @@
     "locale/*.json",
     "icon.svg",
     "market.json",
+    "screenshots.json",
     "bin/lens.exe",
     "bin/lenshud.exe",
     "native/**/*.cs",
@@ -47,6 +56,14 @@
     "README.md",
     "LICENSE"
   ],
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": ">=3.18.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"

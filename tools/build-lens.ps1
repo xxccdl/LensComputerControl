@@ -7,7 +7,7 @@
 #
 # Usage:  powershell -NoProfile -File D:\code\computerconlex\tools\build-lens.ps1
 param(
-  [string]$LensDir = 'D:\code\computerconlex\Lens',
+  [string]$LensDir = 'D:\code\computerconlex\src',
   [string]$OutDir  = 'D:\code\computerconlex\plugin\bin'
 )
 

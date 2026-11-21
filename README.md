@@ -56,13 +56,22 @@ npm i dsh-lens-computer-control
 
 ## 仓库结构
 
+仓库根目录**就是 npm 包本体**（`dsh plugin add` 直接装这个仓库即可）：
+
 ```
-Lens/              引擎 C# 源码（Program.cs 入口，Det/ 六个感知通道）
-plugin/            npm 包：index.js（工具层）+ client.js（HUD 与设置面板）+ bin/*.exe + native/（随包源码）
-tools/             build-lens.ps1（用系统 csc 重建引擎）、sync-to-profile.ps1（本地开发时同步进 profile）
-publish-tools/     npm 发布脚本（stage publish + 浏览器 2FA 审批）
-docs/              截图
+package.json       dsh.bundle + dsh.client 清单；cordis.patch.yml 在根
+index.js           工具层（computer_* 八个工具）
+client.js          HUD 浮层 + 设置面板
+bin/lens.exe       引擎二进制（随包分发，直接可用）
+bin/lenshud.exe    HUD 浮层进程
+native/            引擎源码快照（与 src/ 同步，方便在包里对照）
+src/               引擎 C# 源码（Program.cs 入口，Check.cs 坐标检验，Det/ 六个感知通道）
+tools/             build-lens.ps1（系统 csc 重建引擎）等开发脚本
+publish-tools/     npm staged publish + 浏览器 2FA 审批脚本
+docs/              截图与详细用法（docs/USAGE.md）
 ```
+
+完整用法（工具表、六通道细节、流程脚本、HUD、命令行）见 [docs/USAGE.md](docs/USAGE.md)。
 
 ## 自己构建
 
@@ -70,7 +79,7 @@ docs/              截图
 powershell -NoProfile -File tools/build-lens.ps1
 ```
 
-只需要系统自带的 `csc.exe`（.NET Framework 4.x）+ Windows SDK 的 `Windows.winmd`（WinRT OCR 用）。产物是 `plugin/bin/lens.exe` 与 `plugin/bin/lenshud.exe`。
+只需要系统自带的 `csc.exe`（.NET Framework 4.x）+ Windows SDK 的 `Windows.winmd`（WinRT OCR 用）。产物是 `bin/lens.exe` 与 `bin/lenshud.exe`。
 
 ## 已知限制
 
