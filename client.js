@@ -8,117 +8,154 @@ window.__ModuleLoader__.load({
 
     // 设计目标：像一块"设备状态卡"，而不是一个调试面板。
     // 三等分信息层次：品牌+状态 → 画面/动作 → 唯一的操作（急停）。
+    //
+    // 配色全部走宿主的设计令牌（--dsw-alias-*），拿不到时回退到深色值 ——
+    // 这样浅色主题下卡片不会变成"深色块贴在白底上"。
     const CSS = `
-.lensHud{position:fixed;right:20px;bottom:20px;width:max-content;z-index:2147483000;
+.lensHud{
+  --lens-fg:var(--dsw-alias-label-primary,#e6eefc);
+  --lens-fg2:var(--dsw-alias-label-secondary,#9aa7b8);
+  --lens-fg3:var(--dsw-alias-label-tertiary,#6b7686);
+  --lens-bg:var(--dsw-alias-bg-layer-1,#0f141c);
+  --lens-bg2:var(--dsw-alias-bg-layer-2,#151b25);
+  --lens-line:var(--dsw-alias-border-l2,rgba(255,255,255,.10));
+  --lens-accent:#38bdf8;
+  --lens-ok:#34d399;
+  --lens-warn:#fbbf24;
+  --lens-bad:#f87171;
+  --lens-green:#22c55e;
+  position:fixed;right:20px;bottom:20px;width:max-content;z-index:2147483000;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;
-  color:#e6eefc;-webkit-font-smoothing:antialiased;user-select:none}
+  color:var(--lens-fg);-webkit-font-smoothing:antialiased;user-select:none;
+  font-size:12px}
 .lensHud *{box-sizing:border-box}
 
-.lensCard{position:relative;width:320px;max-width:calc(100vw - 24px);border-radius:16px;overflow:hidden;
-  background:linear-gradient(180deg,rgba(17,22,32,.94),rgba(9,12,18,.97));
-  box-shadow:0 24px 60px -12px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.03),inset 0 1px 0 rgba(255,255,255,.05);
-  backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);
+.lensCard{position:relative;width:340px;max-width:calc(100vw - 24px);border-radius:16px;overflow:hidden;
+  background:linear-gradient(180deg,
+    color-mix(in srgb,var(--lens-bg) 92%,transparent),
+    color-mix(in srgb,var(--lens-bg) 97%,transparent));
+  box-shadow:0 22px 54px -14px rgba(0,0,0,.55),0 0 0 1px color-mix(in srgb,var(--lens-line) 70%,transparent);
+  backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%);
   transition:width .18s cubic-bezier(.4,0,.2,1),box-shadow .18s ease}
 /* 渐变描边：比纯色边框更有层次 */
 .lensCard::before{content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;
-  background:linear-gradient(145deg,rgba(56,189,248,.5),rgba(56,189,248,.05) 38%,rgba(255,255,255,.05) 68%,rgba(129,140,248,.42));
+  background:linear-gradient(145deg,rgba(56,189,248,.45),rgba(56,189,248,.04) 40%,rgba(255,255,255,.04) 66%,rgba(129,140,248,.38));
   -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
   -webkit-mask-composite:xor;mask-composite:exclude}
-
 .lensHud.isStopped .lensCard::before{background:linear-gradient(145deg,rgba(248,113,113,.6),rgba(248,113,113,.08) 45%,rgba(248,113,113,.4))}
-.lensHud.isOffline .lensCard::before{background:linear-gradient(145deg,rgba(148,163,184,.25),rgba(148,163,184,.05))}
-.lensHud.isOffline{opacity:.92}
+.lensHud.isOffline .lensCard::before{background:linear-gradient(145deg,rgba(148,163,184,.22),rgba(148,163,184,.04))}
+.lensHud.isOffline{opacity:.9}
 
 /* ── 头部 ── */
-.lensHead{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:grab;touch-action:none}
+.lensHead{display:flex;align-items:center;gap:9px;padding:10px 12px 10px 13px;cursor:grab;touch-action:none}
 .lensHead:active{cursor:grabbing}
-.lensBrand{display:flex;align-items:center;gap:8px}
-.lensDot{width:7px;height:7px;border-radius:50%;background:#34d399;position:relative;flex:0 0 auto}
-.lensDot::after{content:'';position:absolute;inset:-4px;border-radius:50%;background:rgba(52,211,153,.35);animation:lensPing 2.1s cubic-bezier(0,0,.2,1) infinite}
-@keyframes lensPing{0%{transform:scale(.6);opacity:.85}80%,100%{transform:scale(2.1);opacity:0}}
-.lensDot.off{background:#f87171}
+.lensBrand{display:flex;align-items:center;gap:7px;min-width:0}
+.lensDot{width:7px;height:7px;border-radius:50%;background:var(--lens-ok);position:relative;flex:0 0 auto}
+.lensDot::after{content:'';position:absolute;inset:-4px;border-radius:50%;background:rgba(52,211,153,.32);animation:lensPing 2.4s cubic-bezier(0,0,.2,1) infinite}
+@keyframes lensPing{0%{transform:scale(.6);opacity:.8}80%,100%{transform:scale(2.1);opacity:0}}
+.lensDot.off{background:var(--lens-bad)}
 .lensDot.off::after{background:rgba(248,113,113,.4);animation:none}
 .lensDot.idle{background:#64748b}
 .lensDot.idle::after{display:none}
 
-.lensName{font-size:12.5px;font-weight:650;letter-spacing:.16em;
-  background:linear-gradient(90deg,#e8f4ff,#7dd3fc);-webkit-background-clip:text;background-clip:text;color:transparent}
-.lensState{margin-left:auto;font-size:10px;font-weight:600;letter-spacing:.1em;
-  padding:3px 9px;border-radius:999px;color:#7dd3fc;background:rgba(56,189,248,.12);
-  border:1px solid rgba(56,189,248,.22);font-variant-numeric:tabular-nums}
+.lensName{font-size:12px;font-weight:700;letter-spacing:.14em;
+  background:linear-gradient(90deg,var(--lens-fg),color-mix(in srgb,var(--lens-accent) 62%,var(--lens-fg)));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.lensState{margin-left:auto;font-size:9.5px;font-weight:700;letter-spacing:.1em;
+  padding:3px 8px;border-radius:999px;font-variant-numeric:tabular-nums;white-space:nowrap;
+  color:color-mix(in srgb,var(--lens-accent) 72%,var(--lens-fg));
+  background:color-mix(in srgb,var(--lens-accent) 13%,transparent);
+  border:1px solid color-mix(in srgb,var(--lens-accent) 26%,transparent)}
 .lensHud.isStopped .lensState{color:#fca5a5;background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.28)}
-.lensHud.isOffline .lensState{color:#94a3b8;background:rgba(148,163,184,.1);border-color:rgba(148,163,184,.2)}
-.lensChev{color:#64748b;display:flex;transition:transform .18s ease}
+.lensHud.isOffline .lensState{color:var(--lens-fg3);background:rgba(148,163,184,.1);border-color:rgba(148,163,184,.18)}
+.lensGrip{display:flex;flex-direction:column;gap:2px;margin-left:2px;opacity:.4;flex:0 0 auto}
+.lensGrip i{display:block;width:2px;height:2px;border-radius:50%;background:currentColor;box-shadow:5px 0 0 currentColor,-5px 0 0 currentColor}
+.lensChev{color:var(--lens-fg3);display:flex;transition:transform .18s ease;flex:0 0 auto}
 .lensHud.isCollapsed .lensChev{transform:rotate(-90deg)}
 
 /* ── 画面 ── */
-.lensBody{border-top:1px solid rgba(255,255,255,.06);cursor:grab}
-.lensShot{position:relative;background:#080b11;overflow:hidden}
-.lensShot img{display:block;width:100%;height:132px;object-fit:cover;object-position:top center;opacity:.96}
-.lensShotBar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:8px;
-  padding:18px 12px 9px;font-size:11px;
-  background:linear-gradient(180deg,rgba(6,9,14,0),rgba(6,9,14,.92))}
-.lensWin{color:#dbeafe;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px}
-.lensChip{font-size:10px;padding:2px 7px;border-radius:6px;color:#7dd3fc;
-  background:rgba(56,189,248,.13);border:1px solid rgba(56,189,248,.18);font-variant-numeric:tabular-nums}
-.lensChip.muted{color:#94a3b8;background:rgba(148,163,184,.1);border-color:rgba(148,163,184,.16)}
+.lensBody{border-top:1px solid var(--lens-line);cursor:grab}
+.lensShot{position:relative;background:var(--lens-bg2);overflow:hidden}
+.lensShot img{display:block;width:100%;height:138px;object-fit:cover;object-position:top center;opacity:.97}
+.lensShotBar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:7px;
+  padding:20px 12px 9px;font-size:11px;
+  background:linear-gradient(180deg,rgba(6,9,14,0),rgba(6,9,14,.9))}
+.lensWin{color:#e4eefc;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:186px}
+.lensChip{font-size:9.5px;padding:2px 7px;border-radius:6px;color:#7dd3fc;
+  background:rgba(56,189,248,.13);border:1px solid rgba(56,189,248,.18);font-variant-numeric:tabular-nums;white-space:nowrap}
+.lensChip.muted{color:var(--lens-fg3);background:rgba(148,163,184,.1);border-color:rgba(148,163,184,.16)}
 
 /* ── 空状态 ── */
-.lensVoid{display:flex;flex-direction:column;align-items:center;gap:9px;padding:20px 16px 18px;text-align:center}
-.lensRing{width:34px;height:34px;border-radius:50%;border:1px dashed rgba(125,211,252,.32);
+.lensVoid{display:flex;flex-direction:column;align-items:center;gap:10px;padding:22px 18px 20px;text-align:center}
+.lensRing{width:36px;height:36px;border-radius:50%;border:1px dashed rgba(125,211,252,.3);
   display:flex;align-items:center;justify-content:center;position:relative}
-.lensRing::before{content:'';width:9px;height:9px;border-radius:50%;background:rgba(125,211,252,.42);
+.lensRing::before{content:'';width:9px;height:9px;border-radius:50%;background:rgba(125,211,252,.45);
   box-shadow:0 0 12px rgba(56,189,248,.55);animation:lensBreath 2.6s ease-in-out infinite}
 @keyframes lensBreath{0%,100%{opacity:.45;transform:scale(.85)}50%{opacity:1;transform:scale(1.1)}}
-.lensVoidText{font-size:11.5px;color:#8b98ab;line-height:1.5}
-.lensVoidText b{color:#cbd5e1;font-weight:600}
+.lensVoidText{font-size:11.5px;color:var(--lens-fg2);line-height:1.55}
+.lensVoidText b{color:var(--lens-fg);font-weight:600}
 
 /* ── 动作流 ── */
 .lensFeedHead{display:flex;align-items:center;justify-content:space-between;
-  padding:9px 14px 5px;font-size:10px;letter-spacing:.12em;color:#5f6b7d;font-weight:600}
-.lensRows{cursor:default;padding:0 6px 6px;max-height:126px;overflow:auto;scrollbar-width:thin;scrollbar-color:rgba(148,163,184,.25) transparent}
+  padding:10px 13px 4px;font-size:9.5px;letter-spacing:.12em;color:var(--lens-fg3);font-weight:700}
+.lensRows{cursor:default;padding:0 5px 6px;max-height:124px;overflow:auto;scrollbar-width:thin;scrollbar-color:rgba(148,163,184,.22) transparent}
 .lensRows::-webkit-scrollbar{width:6px}
 .lensRows::-webkit-scrollbar-thumb{background:rgba(148,163,184,.2);border-radius:3px}
-.lensRow{display:grid;grid-template-columns:46px 1fr 7px;gap:9px;align-items:center;
-  padding:5px 8px;border-radius:8px;transition:background .13s ease}
-.lensRow:hover{background:rgba(125,211,252,.06)}
-.lensTime{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:9.5px;
-  color:#4b5768;font-variant-numeric:tabular-nums}
+.lensRow{display:grid;grid-template-columns:44px 1fr 8px;gap:8px;align-items:center;
+  padding:5px 7px;border-radius:8px;transition:background .13s ease}
+.lensRow:hover{background:color-mix(in srgb,var(--lens-accent) 7%,transparent)}
+.lensTime{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:9px;
+  color:var(--lens-fg3);font-variant-numeric:tabular-nums}
 .lensAct{display:flex;align-items:baseline;gap:6px;min-width:0}
-.lensVerb{font-size:10px;font-weight:700;letter-spacing:.04em;color:#7dd3fc;flex:0 0 auto}
-.lensDet{font-size:11px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.lensOk{width:6px;height:6px;border-radius:50%;background:#34d399;box-shadow:0 0 8px rgba(52,211,153,.6)}
-.lensOk.bad{background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,.6)}
+.lensVerb{font-size:9px;font-weight:700;letter-spacing:.05em;flex:0 0 auto;text-transform:uppercase;
+  padding:2px 5px;border-radius:5px;
+  color:color-mix(in srgb,var(--lens-accent) 72%,var(--lens-fg));
+  background:color-mix(in srgb,var(--lens-accent) 12%,transparent)}
+.lensVerb.k-click,.lensVerb.k-run{color:color-mix(in srgb,#a78bfa 70%,var(--lens-fg));background:color-mix(in srgb,#a78bfa 14%,transparent)}
+.lensVerb.k-scan,.lensVerb.k-check{color:color-mix(in srgb,var(--lens-accent) 72%,var(--lens-fg));background:color-mix(in srgb,var(--lens-accent) 12%,transparent)}
+.lensVerb.k-blocked,.lensVerb.k-cancel{color:color-mix(in srgb,#f87171 72%,var(--lens-fg));background:color-mix(in srgb,#f87171 14%,transparent)}
+.lensDet{font-size:11px;color:var(--lens-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.lensOk{width:6px;height:6px;border-radius:50%;background:var(--lens-ok);box-shadow:0 0 8px rgba(52,211,153,.5)}
+.lensOk.bad{background:var(--lens-warn);box-shadow:0 0 8px rgba(251,191,36,.5)}
 
 /* ── 底部 ── */
-.lensFoot{display:flex;align-items:center;gap:10px;padding:10px 12px;
-  border-top:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.012)}
-.lensHint{font-size:10.5px;color:#5f6b7d;letter-spacing:.02em;flex:1 1 auto;
+.lensFoot{display:flex;align-items:center;gap:10px;padding:9px 11px 9px 13px;
+  border-top:1px solid var(--lens-line);background:color-mix(in srgb,var(--lens-bg2) 55%,transparent)}
+.lensHint{font-size:10.5px;color:var(--lens-fg3);letter-spacing:.02em;flex:1 1 auto;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lensHint b{color:var(--lens-fg2);font-weight:600}
 .lensStop{border:1px solid rgba(248,113,113,.34);background:rgba(248,113,113,.09);
-  color:#fca5a5;border-radius:9px;padding:7px 15px;font:600 11.5px/1 inherit;cursor:pointer;
-  letter-spacing:.05em;transition:all .14s ease;flex:0 0 auto}
+  color:color-mix(in srgb,#f87171 68%,var(--lens-fg));border-radius:9px;padding:7px 14px;font:600 11.5px/1 inherit;cursor:pointer;
+  letter-spacing:.06em;transition:all .14s ease;flex:0 0 auto}
 .lensStop:hover:not(:disabled){background:rgba(248,113,113,.18);border-color:rgba(248,113,113,.6);
-  color:#fecaca;box-shadow:0 0 18px -4px rgba(248,113,113,.5)}
+  box-shadow:0 0 18px -4px rgba(248,113,113,.45)}
 .lensStop:active:not(:disabled){transform:translateY(1px)}
 .lensStop:disabled{opacity:.45;cursor:default}
-.lensStop.armed{border-color:rgba(52,211,153,.36);background:rgba(52,211,153,.1);color:#6ee7b7}
+.lensStop.armed{border-color:rgba(52,211,153,.36);background:rgba(52,211,153,.1);color:color-mix(in srgb,#34d399 62%,var(--lens-fg))}
 .lensStop.armed:hover:not(:disabled){background:rgba(52,211,153,.18);border-color:rgba(52,211,153,.6);
-  color:#a7f3d0;box-shadow:0 0 18px -4px rgba(52,211,153,.5)}
+  box-shadow:0 0 18px -4px rgba(52,211,153,.45)}
 
 /* 折叠态：宽度交给内容决定，不要留固定宽 —— 否则右边会多出一块既挡页面又拖不动的透明区 */
-.lensHud.isCollapsed .lensCard{width:auto}
+.lensHud.isCollapsed .lensCard{width:auto;max-width:min(420px,calc(100vw - 24px))}
+.lensMin{display:flex;align-items:center;gap:8px;padding-right:2px;max-width:260px}
+.lensMinText{font-size:11px;color:var(--lens-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* 待确认的坐标点击：绿框图 + 确认/取消 */
-.lensPending{border-top:1px solid rgba(255,255,255,.08);background:rgba(34,197,94,.07);padding:10px 12px}
-.lensPendingTop{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:#9ff0c4}
-.lensPendingTop b{font-weight:600;color:#d8ffe9}
-.lensPending img{display:block;width:100%;margin:8px 0;border-radius:8px;border:1px solid rgba(34,197,94,.35);background:#0b0f14}
+.lensPending{border-top:1px solid rgba(34,197,94,.22);background:rgba(34,197,94,.07);padding:10px 12px 11px}
+.lensPendingTop{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11.5px;color:color-mix(in srgb,#22c55e 58%,var(--lens-fg))}
+.lensPendingTop b{font-weight:700;color:color-mix(in srgb,#22c55e 26%,var(--lens-fg));font-variant-numeric:tabular-nums}
+.lensPendMeta{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:10.5px;color:var(--lens-fg2)}
+.lensPendMeta .lensChip{color:color-mix(in srgb,#22c55e 55%,var(--lens-fg));
+  background:color-mix(in srgb,#22c55e 13%,transparent);border-color:color-mix(in srgb,#22c55e 26%,transparent)}
+.lensPending img{display:block;width:100%;margin:8px 0 9px;border-radius:9px;background:var(--lens-bg2);
+  box-shadow:0 0 0 1px rgba(34,197,94,.32)}
 .lensPendingBtns{display:flex;gap:8px}
-.lensPendingBtns button{flex:1;padding:6px 0;border:0;border-radius:8px;cursor:pointer;font-size:12px;font-family:inherit}
+.lensPendingBtns button{flex:1;padding:8px 0;border:0;border-radius:9px;cursor:pointer;font-size:11.5px;font-family:inherit;
+  transition:filter .14s ease}
 .lensPendingBtns button:disabled{opacity:.5;cursor:default}
-.lensPendingBtns .ok{background:#22c55e;color:#04150b;font-weight:600}
-.lensPendingBtns .no{background:rgba(255,255,255,.1);color:#e6eefc}
+.lensPendingBtns button:hover:not(:disabled){filter:brightness(1.08)}
+.lensPendingBtns .ok{background:var(--lens-green);color:#04150b;font-weight:700}
+.lensPendingBtns .no{background:color-mix(in srgb,var(--lens-fg) 10%,transparent);color:var(--lens-fg)}
 `
 
     function useStatus() {
@@ -184,10 +221,16 @@ window.__ModuleLoader__.load({
     function PendingCard(props) {
       const item = props.item || {}
       const onDecide = props.onDecide || function () {}
+      const cand = item.candidate
       return h('div', { className: 'lensPending' },
         h('div', { className: 'lensPendingTop' },
           h('span', null, '待确认点击 ', h('b', null, '(' + item.x + ', ' + item.y + ')')),
-          props.more > 0 ? h('span', null, '还有 ' + props.more + ' 条') : null),
+          props.more > 0 ? h('span', { className: 'lensChip muted' }, '还有 ' + props.more + ' 条') : null),
+        (cand || item.covered)
+          ? h('div', { className: 'lensPendMeta' },
+              cand ? h('span', { className: 'lensChip' }, '#' + cand.id + ' ' + (cand.text || '')) : null,
+              item.covered ? h('span', { className: 'lensChip muted' }, '被遮挡') : null)
+          : null,
         h('img', {
           src: BASE + '/preview?token=' + encodeURIComponent(item.token) + '&t=' + item.at,
           alt: '点击预览',
@@ -331,6 +374,12 @@ window.__ModuleLoader__.load({
       // 拖动后的位置用 left/top 覆盖默认的 right/bottom
       const posStyle = pos ? { left: pos.x + 'px', top: pos.y + 'px', right: 'auto', bottom: 'auto' } : null
 
+      // 折叠成一条时也留一句"刚才干了什么"——否则缩起来完全没有信息量
+      const brief = collapsed && rows[0]
+        ? h('span', { className: 'lensMinText', title: rows[0].detail },
+            rows[0].detail || String(rows[0].kind || ''))
+        : null
+
       const head = h('div', {
         className: 'lensHead',
         onMouseDown: startDrag,
@@ -341,12 +390,15 @@ window.__ModuleLoader__.load({
         h('span', { className: 'lensBrand' },
           h('span', { className: dotClass }),
           h('span', { className: 'lensName' }, 'LENS')),
+        brief,
         h('span', { className: 'lensState' }, stateText),
+        h('span', { className: 'lensGrip', 'aria-hidden': 'true' }, h('i')),
         h(Chevron))
 
       if (collapsed) {
         return h('div', { className: rootClass, ref: rootRef, style: posStyle },
-          h('style', null, CSS), h('div', { className: 'lensCard' }, head))
+          h('style', null, CSS),
+          h('div', { className: 'lensCard' }, head))
       }
 
       // ── 画面区：有截图显示截图，否则是一个安静的待命态 ──
@@ -381,7 +433,8 @@ window.__ModuleLoader__.load({
                 return h('div', { className: 'lensRow', key: i },
                   h('span', { className: 'lensTime' }, clock(r.at)),
                   h('span', { className: 'lensAct' },
-                    h('span', { className: 'lensVerb' }, String(r.kind || '').toUpperCase()),
+                    h('span', { className: 'lensVerb k-' + String(r.kind || '').toLowerCase() },
+                      String(r.kind || '').toUpperCase()),
                     h('span', { className: 'lensDet', title: r.detail }, r.detail || '')),
                   h('span', { className: 'lensOk' + (r.ok ? '' : ' bad') }))
               })))

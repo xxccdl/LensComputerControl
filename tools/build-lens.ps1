@@ -1,4 +1,4 @@
-# Build the Lens engines with the in-box csc.exe (zero third-party deps).
+﻿# Build the Lens engines with the in-box csc.exe (zero third-party deps).
 #
 #   lens.exe       main engine (capture / OCR / UIA / vision / check). Needs the WinRT
 #                  projection: Windows SDK union Windows.winmd + .NET Framework reference
@@ -8,7 +8,7 @@
 # Usage:  powershell -NoProfile -File D:\code\computerconlex\tools\build-lens.ps1
 param(
   [string]$LensDir = 'D:\code\computerconlex\src',
-  [string]$OutDir  = 'D:\code\computerconlex\plugin\bin'
+  [string]$OutDir  = 'D:\code\computerconlex\bin'
 )
 
 $ErrorActionPreference = 'Stop'
