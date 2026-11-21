@@ -26,6 +26,7 @@
 - 点的是**令牌里记住的坐标**，不是这次传进来的（防止「看的是 A、点的是 B」）
 - 令牌一次性、180 秒有效，复用/过期都拒绝
 - `id` / `cell` 点击不预览（坐标本来就是引擎算的）；要跳过用 `force: true`
+- **脚本也绕不过去**：`computer_run` 里带裸坐标的 `click x= y=` 会被拦下（`SCRIPT_COORD_CLICK_BLOCKED`）——脚本是「一次编排、中途没法确认」的形态，正好是预览要防的那类误点；改用 `click find=text:…` / `click id=…`（坐标由引擎算），或显式传 `force: true`
 - **HUD 上也能裁决**：预览时 HUD 浮出一张待确认卡片（绿框图 + `确认点击` / `取消`），人不经过模型也能放行或丢掉这一次点击；模型确认与人工确认走同一套一次性令牌（`/pending`、`/preview`、`/confirm`、`/cancel` 见 [docs/USAGE.md](docs/USAGE.md)）
 
 ![坐标点击预览](docs/click-preview.png)

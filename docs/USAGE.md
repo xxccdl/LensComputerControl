@@ -137,7 +137,7 @@ computer_act { window: "微信", confirm: "ck_3f9a1b7c" }
 - 令牌一次性、180 秒有效；过期或复用都返回 `CONFIRM_INVALID` / `CONFIRM_EXPIRED`
 - 要换位置就重新给坐标，会重新出图并给新令牌
 - `id` / `cell` 点击不预览（坐标本来就是引擎算的，不是模型的猜测）；确实要跳过预览时用 `force: true`
-- `computer_run` 脚本里的 `click x= y=` 仍按脚本一次性执行（脚本本身就是编排好的流程）
+- `computer_run` 脚本**也绕不过去**：带裸坐标的 `click x= y=` 会被拦下（`SCRIPT_COORD_CLICK_BLOCKED`）——脚本是一次编排、中途没法确认的形态，正好是预览要防的那类误点。改用 `click find=text:…` / `click id=…`（坐标由引擎算），或显式给 `computer_run` 传 `force: true`
 
 ### 在 HUD 上人工确认
 

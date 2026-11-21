@@ -1124,6 +1124,28 @@ export function apply(ctx, config) {
       let script = String(args?.script || '').trim()
       if (!script && Array.isArray(args?.steps)) script = args.steps.map((s) => String(s)).join('\n')
       if (!script) return { ok: false, error: '缺少 script 或 steps' }
+
+      // 坐标点击预览不能从脚本里绕过去：开了 confirmClicks 就拒绝带裸坐标的 click 行。
+      // 脚本是"一次编排、不可中途确认"的形态，正好是预览要防的那类误点。
+      if (settings.confirmClicks && args?.force !== true) {
+        const offending = script
+          .split('\n')
+          .map((line, i) => ({ line: line.trim(), n: i + 1 }))
+          .filter((x) => /^click\b/i.test(x.line) && /\b[xy]\s*=/.test(x.line))
+        if (offending.length) {
+          return {
+            ok: false,
+            code: 'SCRIPT_COORD_CLICK_BLOCKED',
+            message:
+              '脚本里的坐标点击（第 ' + offending.map((o) => o.n).join('、') + ' 行）被拦下了：开了「坐标点击先预览」时，裸坐标必须先在 computer_act 里预览确认。',
+            offending: offending.map((o) => o.line),
+            hint:
+              '改用候选定位（click find=text:… 或 click id=…，坐标由引擎算，不受限制）；' +
+              '确有必要在脚本里点坐标时，给 computer_run 传 force:true。',
+          }
+        }
+      }
+
       const argv = ['run', '--text', script]
       if (args?.continueOnError) argv.push('--continue')
       return run(argv)
