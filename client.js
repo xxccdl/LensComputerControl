@@ -108,6 +108,17 @@ window.__ModuleLoader__.load({
 
 /* 折叠态：宽度交给内容决定，不要留固定宽 —— 否则右边会多出一块既挡页面又拖不动的透明区 */
 .lensHud.isCollapsed .lensCard{width:auto}
+
+/* 待确认的坐标点击：绿框图 + 确认/取消 */
+.lensPending{border-top:1px solid rgba(255,255,255,.08);background:rgba(34,197,94,.07);padding:10px 12px}
+.lensPendingTop{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:#9ff0c4}
+.lensPendingTop b{font-weight:600;color:#d8ffe9}
+.lensPending img{display:block;width:100%;margin:8px 0;border-radius:8px;border:1px solid rgba(34,197,94,.35);background:#0b0f14}
+.lensPendingBtns{display:flex;gap:8px}
+.lensPendingBtns button{flex:1;padding:6px 0;border:0;border-radius:8px;cursor:pointer;font-size:12px;font-family:inherit}
+.lensPendingBtns button:disabled{opacity:.5;cursor:default}
+.lensPendingBtns .ok{background:#22c55e;color:#04150b;font-weight:600}
+.lensPendingBtns .no{background:rgba(255,255,255,.1);color:#e6eefc}
 `
 
     function useStatus() {
@@ -167,6 +178,31 @@ window.__ModuleLoader__.load({
     function Chevron() {
       return h('svg', { className: 'lensChev', width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
         h('path', { d: 'M6 9l6 6 6-6', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))
+    }
+
+    /** HUD 里的「待确认点击」卡片：绿框预览图 + 确认 / 取消。 */
+    function PendingCard(props) {
+      const item = props.item || {}
+      const onDecide = props.onDecide || function () {}
+      return h('div', { className: 'lensPending' },
+        h('div', { className: 'lensPendingTop' },
+          h('span', null, '待确认点击 ', h('b', null, '(' + item.x + ', ' + item.y + ')')),
+          props.more > 0 ? h('span', null, '还有 ' + props.more + ' 条') : null),
+        h('img', {
+          src: BASE + '/preview?token=' + encodeURIComponent(item.token) + '&t=' + item.at,
+          alt: '点击预览',
+        }),
+        h('div', { className: 'lensPendingBtns' },
+          h('button', {
+            className: 'ok',
+            disabled: props.busy,
+            onClick: function (e) { e.stopPropagation(); onDecide(item.token, 'confirm') },
+          }, '确认点击'),
+          h('button', {
+            className: 'no',
+            disabled: props.busy,
+            onClick: function (e) { e.stopPropagation(); onDecide(item.token, 'cancel') },
+          }, '取消')))
     }
 
     function Hud() {
@@ -271,6 +307,21 @@ window.__ModuleLoader__.load({
           .finally(function () { setBusy(false) })
       }
 
+      // HUD 上的人工裁决：确认 = 真的点下去，取消 = 丢掉这次预览
+      const decide = function (token, action) {
+        setBusy(true)
+        fetch(BASE + '/' + action + '?token=' + encodeURIComponent(token), { method: 'POST' })
+          .then(function (r) { return r.json() })
+          .then(function (j) {
+            setState(function (s) {
+              const rest = (s.pending || []).filter(function (p) { return p.token !== token })
+              return Object.assign({}, s, { pending: rest, lastDecision: { token: token, action: action, result: j } })
+            })
+          })
+          .catch(function () {})
+          .finally(function () { setBusy(false) })
+      }
+
       const dotClass = 'lensDot' + (offline ? ' idle' : stopped ? ' off' : '')
       const stateText = offline ? 'OFFLINE' : stopped ? 'STOPPED' : (last && last.level ? last.level : 'READY')
 
@@ -314,6 +365,12 @@ window.__ModuleLoader__.load({
                 ? ['Lens 引擎未连上', h('br'), '检查插件 Host 半是否启动']
                 : [h('b', null, '待命中'), ' · 还没有扫描过窗口']))
 
+      // ── 待确认的坐标点击：模型点了坐标但还没落点，等这里的人确认 ──
+      const pending = state.pending || []
+      const pendingCard = pending.length
+        ? h(PendingCard, { item: pending[0], more: pending.length - 1, busy: busy, onDecide: decide })
+        : null
+
       const feed = rows.length
         ? h('div', null,
             h('div', { className: 'lensFeedHead' },
@@ -343,7 +400,7 @@ window.__ModuleLoader__.load({
         h('style', null, CSS),
         h('div', { className: 'lensCard' },
           head,
-          h('div', { className: 'lensBody', onMouseDown: startDrag }, shot, feed),
+          h('div', { className: 'lensBody', onMouseDown: startDrag }, shot, pendingCard, feed),
           foot))
     }
 
@@ -611,6 +668,8 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots'],
+      // 导出内部组件仅供本地测试直接渲染；宿主只读 inject / apply，多这一个键没有任何副作用
+      internals: { PendingCard: PendingCard, LensSettings: LensSettings, Hud: Hud },
       apply(ctx) {
         ctx.slots.inject('shell.overlay', function () {
           return ctx.slots.register(

@@ -350,6 +350,65 @@ export function apply(ctx, config) {
     return result
   }
 
+  // ---- 坐标点击的「预览 → 确认」：工具与 HUD 面板共用这一份实现 ----
+  /** 预览列表（给 HUD 面板渲染待确认卡片用）。 */
+  const pendingList = () =>
+    [...pendingClicks.entries()]
+      .map(([token, p]) => ({
+        token,
+        x: p.x,
+        y: p.y,
+        window: p.window,
+        at: p.at,
+        ageMs: Date.now() - p.at,
+        inside: p.inside,
+        covered: !!p.covered,
+        candidate: p.candidate || null,
+      }))
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 5)
+
+  /** 真正落点。点的是令牌里记住的坐标，不是调用方这次传进来的 —— 防止「看的是 A、点的是 B」。 */
+  const confirmPending = async (token) => {
+    const pending = pendingClicks.get(token)
+    if (!pending) {
+      return {
+        ok: false,
+        code: 'CONFIRM_INVALID',
+        message: '确认令牌无效或已经用过（预览只能确认一次）',
+        hint: '重新调一次 computer_act 只给坐标，会重新出图并给新令牌。',
+      }
+    }
+    pendingClicks.delete(token)
+    if (Date.now() - pending.at > PENDING_TTL) {
+      return {
+        ok: false,
+        code: 'CONFIRM_EXPIRED',
+        message: '预览已过期（超过 ' + Math.round(PENDING_TTL / 1000) + ' 秒），为安全起见请重新预览。',
+        hint: '再调一次 computer_act 只给坐标即可。',
+      }
+    }
+    const argv0 = ['click', '--window', pending.window, '--x', String(pending.x), '--y', String(pending.y)]
+    if (pending.button) argv0.push('--button', String(pending.button))
+    if (pending.count) argv0.push('--count', String(pending.count))
+    if (pending.background) argv0.push('--bg')
+    record('click', `confirmed (${pending.x},${pending.y})`, true)
+    const done = await run(argv0)
+    return Object.assign({}, done, {
+      confirmed: true,
+      clickedAt: { x: pending.x, y: pending.y },
+      preview: pending.image,
+      note: '这次是确认后的真实点击。',
+    })
+  }
+
+  /** 取消一次待确认的点击（HUD 上的「取消」按钮走这里）。 */
+  const cancelPending = (token) => {
+    const had = pendingClicks.delete(token)
+    if (had) record('cancel', ` discarded ${token}`, true)
+    return { ok: true, cancelled: had }
+  }
+
   // ---------------------------------------------------------------- tool 1
   const windowsTool = {
     name: 'computer_windows',
@@ -729,40 +788,7 @@ export function apply(ctx, config) {
       // 不需要预览（那本来就是引擎的答案，不是模型的猜测）。
       const isCoordClick = args?.id === undefined && !args?.cell
 
-      if (args?.confirm) {
-        const token = String(args.confirm)
-        const pending = pendingClicks.get(token)
-        if (!pending) {
-          return {
-            ok: false,
-            code: 'CONFIRM_INVALID',
-            message: '确认令牌无效或已经用过（预览只能确认一次）',
-            hint: '重新调一次 computer_act 只给坐标，会重新出图并给新令牌。',
-          }
-        }
-        pendingClicks.delete(token)
-        if (Date.now() - pending.at > PENDING_TTL) {
-          return {
-            ok: false,
-            code: 'CONFIRM_EXPIRED',
-            message: '预览已过期（超过 ' + Math.round(PENDING_TTL / 1000) + ' 秒），为安全起见请重新预览。',
-            hint: '再调一次 computer_act 只给坐标即可。',
-          }
-        }
-        // 点的是令牌里记住的坐标，不是这次传进来的 —— 防止"看的是 A、点的是 B"
-        const argv0 = ['click', '--window', pending.window, '--x', String(pending.x), '--y', String(pending.y)]
-        if (pending.button) argv0.push('--button', String(pending.button))
-        if (pending.count) argv0.push('--count', String(pending.count))
-        if (pending.background) argv0.push('--bg')
-        record('click', `confirmed (${pending.x},${pending.y})`, true)
-        const done = await run(argv0)
-        return Object.assign({}, done, {
-          confirmed: true,
-          clickedAt: { x: pending.x, y: pending.y },
-          preview: pending.image,
-          note: '这次是确认后的真实点击。',
-        })
-      }
+      if (args?.confirm) return confirmPending(String(args.confirm))
 
       if (isCoordClick && settings.confirmClicks && args?.force !== true) {
         const stamp = Date.now().toString(36)
@@ -784,6 +810,8 @@ export function apply(ctx, config) {
         pendingClicks.set(token, {
           at: Date.now(), window: w, x: px, y: py,
           button: args?.button, count: args?.count, background: args?.background, image: chk.image,
+          inside: chk.inside !== false, covered: !!chk.covered,
+          candidate: chk.candidate || null, pixel: chk.pixel || null,
         })
         // 只留最近 20 条，避免长时间会话里堆垃圾
         if (pendingClicks.size > 20) {
@@ -1309,8 +1337,47 @@ export function apply(ctx, config) {
         uptimeMs: Date.now() - hud.startedAt,
         lastScan: hud.lastScan,
         timeline: hud.timeline.slice(0, 12),
+        pending: pendingList(),
         hudPort,
       })
+      return
+    }
+    if (url.pathname === '/pending') {
+      sendJson(res, { ok: true, pending: pendingList() })
+      return
+    }
+    // 人工确认/取消：HUD 面板上的按钮走这两个口，跟模型调 computer_act {confirm} 是同一条实现
+    if (url.pathname === '/confirm') {
+      const token = String(url.searchParams.get('token') || '')
+      if (!token) { sendJson(res, { ok: false, code: 'BAD_ARGS', message: 'missing token' }); return }
+      confirmPending(token)
+        .then((result) => sendJson(res, result))
+        .catch((e) => sendJson(res, { ok: false, code: 'CONFIRM_FAILED', message: String(e && e.message) }))
+      return
+    }
+    if (url.pathname === '/cancel') {
+      const token = String(url.searchParams.get('token') || '')
+      sendJson(res, cancelPending(token))
+      return
+    }
+    // 预览图（HUD 待确认卡片里显示的那张绿框图）
+    if (url.pathname === '/preview') {
+      const token = String(url.searchParams.get('token') || '')
+      const pending = pendingClicks.get(token)
+      const file = pending && pending.image
+      if (!file) {
+        res.writeHead(404, cors)
+        res.end('no such pending preview')
+        return
+      }
+      try {
+        const buf = readFileSync(file)
+        res.writeHead(200, { ...cors, 'Content-Type': 'image/png' })
+        res.end(buf)
+      } catch {
+        res.writeHead(500, cors)
+        res.end('read failed')
+      }
       return
     }
     if (url.pathname === '/stop' || url.pathname === '/resume') {
