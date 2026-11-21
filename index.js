@@ -413,8 +413,7 @@ export function apply(ctx, config) {
   const windowsTool = {
     name: 'computer_windows',
     description:
-      '列出当前所有可见的顶层窗口（标题、hwnd、DPI、进程、最小化状态、精确可见边框）。' +
-      '在做任何点击之前先用它拿到目标窗口，后续所有操作都用窗口标题的稳定片段或 hwnd 定位。',
+      '列出可见顶层窗口（标题/hwnd/DPI/进程/最小化/可见边框）。定位目标窗口的第一步：之后用标题片段或 hwnd，不要靠猜坐标。',
     parameters: {
       type: 'object',
       properties: {
@@ -463,15 +462,7 @@ export function apply(ctx, config) {
   const scanTool = {
     name: 'computer_scan',
     description:
-      '扫描一个窗口，产出「可点击候选表」并渲染一张带编号的标注图。**有文字控件的界面优先用它**——一次就能拿到全部候选。\n但如果候选里没有你要点的东西、或返回里出现「扫描质量差」的警告，**立刻改用 computer_vision**，不要重扫。\n' +
-      '候选来自多通道：uia(无障碍树) / solid(实心色块按钮) / ocr(文字) / table(表格行列) / template(已教过的锚点)。' +
-      '自绘窗口（微信、QQ、券商行情、Java 客户端）通常 UIA 为空，靠 solid+ocr+table 兜住。\n' +
-      '返回的每个候选带 id、通道、类型、屏幕物理坐标 screen{cx,cy}、文字与颜色。' +
-      '**你必须只用候选的 id 来指定点击目标，绝不要自己编造坐标。**\n' +
-      'overlay 字段是一张标注图路径，需要看图确认时用 read_image 打开它。\n' +
-      '【微信/QQ 这类 Qt 自绘窗口】uia 基本为空（节点 <10），候选主要来自 ocr：一次约 20–40 个，' +
-      '够用但**文字会认错**（老师→老丝、取消→取肖、语音通话→浯音通话），所以 find=text 要写短一点的关键词、' +
-      '不要拿整句去精确匹配。会话列表在左、消息区在右；找不到某个联系人时先 scroll 列表或直接用搜索框，别硬扫。',
+      '扫描一个窗口 → 候选表 + 带编号的标注图。**有文字/标准控件的界面首选它**，一次拿全候选。\n· 候选含 id、通道、类型、中心点 screen{cx,cy}、文本。**只用 id 指定点击，绝不自己编坐标。**\n· 候选里没有目标、或返回出现「扫描质量差」→ **立刻转 computer_vision，不要重扫**。\n· 通道：uia / solid(实心按钮) / ocr(文字) / table(表格) / template(锚点)。微信、QQ、券商行情、Java 客户端 UIA 常为空，靠后四个兜住。\n· overlay 是标注图路径，需要看图就 read_image。自绘窗口 OCR 会认错字（取消→取肖），find=text 用短关键词。',
     parameters: {
       type: 'object',
       properties: {
@@ -558,23 +549,7 @@ export function apply(ctx, config) {
   const actTool = {
     name: 'computer_act',
     description:
-      '对窗口执行一个动作。三种最常用形态：\n' +
-      '1) 点候选：{window, id} —— 强烈推荐，坐标由引擎按候选框计算。\n' +
-      '2) 发键：{window, combo} —— 如 "ctrl+a"、"enter"、"alt+tab"，键盘流往往比点击更可靠。\n' +
-      '3) 输入文字：{window, text} —— 支持中文（Unicode 注入）。\n' +
-      '4) 粘贴：{window, action:"paste", text} —— **超过 20 个字符优先用这个**：一次原子操作，' +
-      '不怕中途焦点漂移；完成后会自动还原你原来的剪贴板。\n' +
-      '\n【坐标点击默认只预览、不落点】给 x/y 点击时，工具**不会先点**：它跑一次坐标检验，' +
-      '回一张把命中范围画成绿框（+右下角放大镜）的图，并给一个 `ck_xxx` 确认令牌。' +
-      '你（或用户）看图确认位置对，再调 `{ window, confirm: "ck_xxx" }` 才真正点击；' +
-      '要换位置就重新给坐标再预览。令牌一次性、180 秒有效。用 `id` / `cell` 点击不受此限（坐标是引擎算的）。\n' +
-      '可选 background=true：用窗口消息后台点击，不抢焦点、不动真实鼠标（对 Qt/Win32 自绘窗口常常有效）。\n' +
-      '默认会先把目标窗口强制前台（系统可能拒绝，返回里的 notes 会说明），然后再点。\n' +
-      '【微信】点会话/联系人优先用 {id}（来自 computer_scan 的候选编号），比坐标稳；' +
-      '发消息时先点输入框再 {text:"…"} 再 {combo:"enter"}。' +
-      '窗口点完消失（比如登录成功后登录窗关闭）会返回 warning:"window_gone"，那是成功不是失败。' +
-      '登录后主窗是**新的 hwnd**，别继续用登录窗的句柄，用 window:"微信" 重新定位。\n' +
-      '【点不准时】不要反复试坐标；没有可用候选（图标/画布/游戏）就用 computer_vision 定位后再回来点。',
+      '对窗口执行动作。定位优先级：id（引擎算坐标）> cell（网格）> x/y（自己算，必须预览确认）。\n· 键鼠：combo="ctrl+a"；text 支持中文；**超过 20 字用 action:"paste"**（原子操作，自动还原剪贴板）。\n· **坐标点击默认只预览、不落点**：给 x/y 会先回一张绿框+放大镜的图和一个 ck_ 令牌；确认位置无误后调 {window, confirm:"ck_xxx"} 才真点。令牌一次性、180 秒有效；id/cell 点击不受限。\n· force:true 跳过预览直接点（谨慎）；background:true 用窗口消息点击，不抢焦点。\n· 返回 window_gone = 动作后窗口关闭，通常是点对了。\n· 点不准别反复试坐标：先 scan 拿 id；没有候选再用 vision。',
     parameters: {
       type: 'object',
       properties: {
@@ -863,22 +838,7 @@ export function apply(ctx, config) {
   const visionTool = {
     name: 'computer_vision',
     description:
-      '**纯视觉坐标定位**，不依赖任何识别通道。三种模式：\n' +
-      'mode="cells"（默认）：把屏幕/窗口切成 N 格，每格印着屏幕绝对坐标，' +
-      '你用 read_image 看图、报格子编号；再传 path 就只切那一格，逐步收窄直到够准。\n' +
-      'mode="grid"：给某个窗口盖一层轴刻度网格（列号/行号），返回标注图。\n' +
-      'mode="zoom"：把 grid 的某个格子放大并叠二级网格，返回每个子格子的精确屏幕坐标。\n' +
-      '\n【什么时候必须用它 —— 不要硬用 computer_scan 反复试】\n' +
-      '· scan 一个候选都没给出，或候选里根本没有你要点的东西\n' +
-      '· 扫描显示 uia=不可用 且候选很少（<8）——识别通道基本失灵\n' +
-      '· 目标是**没有文字的东西**：图标、图形按钮、开关、滑块、画布、游戏、远程桌面\n' +
-      '· 需要很精确的落点（误差 <30 像素），而这些对象没有可用的元素条目\n' +
-      '**判断法则：scan 返回的候选和你要找的东西对不上，别重扫第二次，直接换视觉定位。**\n' +
-      '\n【效率技巧】\n' +
-      '· cells=9（3×3）时每级格子形状完全不变，最稳、推荐；cells=10 也能用但长宽比逐级翻转\n' +
-      '· 已知大概位置就用 rect:"x,y,w,h" 直接框那块，比逐级下钻省两次往返\n' +
-      '· 拿不准就 mark:"x,y" 画红色十字准星，一眼看出目标落在哪格、偏多少\n' +
-      '· 做到够准后 computer_act {x,y} 点击，坐标就是格子给的 cx,cy',
+      '纯视觉定位，不依赖任何识别通道。scan 给不出候选、或目标没有文字（图标/画布/游戏/远程桌面）时用它。\n· mode="cells"（默认）：区域切 N 格、每格印屏幕绝对坐标，你报格子编号；再传 path:"7" 只切那一格，逐级收窄（如 "7.4"）。\n· mode="grid"：窗口轴刻度网格；mode="zoom"：放大某格并叠二级网格（需 c/r）。\n· cells=9 每级形状稳定，推荐；已知大概位置用 rect:"x,y,w,h" 跳过下钻；mark:"x,y" 画准星核对。\n· 够准后 computer_act {x,y} —— 会先出预览图，确认后再点。',
     parameters: {
       type: 'object',
       properties: {
@@ -980,18 +940,7 @@ export function apply(ctx, config) {
   const checkTool = {
     name: 'computer_check',
     description:
-      '坐标检验（只读，不点不按）：把你要点的坐标交给它，回一张截图 —— 你要点的那一块被画成**绿色框**（默认 24x24，鼠标热区大小），' +
-      '右下角贴一张同一处的**放大镜**（最近邻放大 + 8px 像素格）。看图就知道这个坐标到底压住了哪个字、哪个图标、还是边缘。\n' +
-      '\n【什么时候用】\n' +
-      '· 坐标是你自己算的 / 从 computer_vision 格子里拿的 / 从图里目测的 —— 点之前先 check 一次\n' +
-      '· 点了没反应、或者怕点到隔壁按钮时\n' +
-      '· 想确认某个坐标是不是落在刚 scan 出来的某个候选上（会直接告诉你 #id 和文字）\n' +
-      '\n【看什么】\n' +
-      '· 绿框正中间是不是你要的目标；偏了就把偏差加减到坐标上再 check 一次\n' +
-      '· JSON 里 `covered:true` = 这一点此刻被别的窗口盖住（直接点会打错窗口）\n' +
-      '· JSON 里 `inside:false` = 坐标落在窗口外，重新取点\n' +
-      '· `candidate` 有值 = 这个点命中了上次 scan 的某条候选，点它更稳\n' +
-      '\n它不改任何状态，也不移动鼠标。确认没问题后再 computer_act 点下去。',
+      '坐标检验（只读，不动鼠标、不发按键）。给坐标 → 回一张命中范围绿框（默认 24×24）+ 右下角放大镜的图，并说明：是否在窗口内、是否被遮挡、像素色、命中哪条候选。\n· 用在自己算的或视觉得到的坐标落点之前；点了没反应时也用它复核。\n· covered=true = 被其他窗口盖住，直接点会打错窗口；inside=false = 点在窗口外；candidate 有值可直接改用 id。\n· 绿框偏了就按偏差修正坐标再 check 一次。',
     parameters: {
       type: 'object',
       properties: {
@@ -1068,24 +1017,7 @@ export function apply(ctx, config) {
   const runTool = {
     name: 'computer_run',
     description:
-      '一次调用执行多步电脑控制（脚本自动化），省掉 N 次往返。每行一个动作，格式「动词 键=值 …」：\n' +
-      '  window <标题>         设定目标窗口（后续坐标可写 w 前缀表示相对客户区）\n' +
-      '  focus                 把目标窗口置前\n' +
-      '  click x=100 y=200 / click find=text:确定 / click id=6 count=2\n' +
-      '  type text=你好\n' +
-      '  key combo=ctrl+a\n' +
-      '  scroll x=500 y=400 delta=-3 times=2\n' +
-      '  drag from=w100,w100 to=w300,w400 duration=600\n' +
-      '  wait for=changed|exists|text:xxx timeout=5000\n' +
-      '  verify expect=changed\n' +
-      '  sleep ms=500\n' +
-      '遇到失败默认停下并返回每一步的 trace；加 continue=true 则失败也继续。\n' +
-      '适合「打开→输入→回车→截图核验」这类固定套路，比逐步调用快得多也更稳。\n' +
-      '【微信发消息】推荐走搜索框，比在会话列表里翻找可靠得多：\n' +
-      '  window 微信 / focus / key combo=ctrl+f / type text=张三 / key combo=enter\n' +
-      '  sleep ms=400 / type text=在吗 / key combo=enter / wait for=changed timeout=3000\n' +
-      '【微信已知坑】find=text 要用短关键词（OCR 会认错字）；登录窗和主窗是两个不同 hwnd，' +
-      '脚本里用 window 标题而不是 hwnd；窗口在托盘时先 focus（会自动还原），不要重开应用。',
+      '一次调用执行多步（脚本自动化），省掉多次往返。每行「动词 键=值 …」：\n  window <标题> / focus / click id=6 | click find=text:确定 | click x=100 y=200 / type text=你好 / key combo=ctrl+a\n  scroll x=500 y=400 delta=-3 times=2 / drag from=w100,w100 to=w300,w400 duration=600 / wait for=changed timeout=5000 / verify expect=changed / sleep ms=500\n· 默认遇错即停并返回逐步 trace；continue=true 则失败也继续。\n· **开启坐标预览时，脚本里的 click x= y= 会被拒（SCRIPT_COORD_CLICK_BLOCKED）**：改用 find=text / id，或给本工具传 force:true。\n· 适合固定套路：打开→输入→回车→核验。微信发消息走搜索框最稳：window 微信 / focus / key combo=ctrl+f / type text:张三 / key combo=enter。',
     parameters: {
       type: 'object',
       properties: {
@@ -1155,10 +1087,7 @@ export function apply(ctx, config) {
   const windowTool = {
     name: 'computer_window',
     description:
-      '窗口管理：最大化 / 最小化 / 还原 / 关闭 / 移动缩放 / 置顶。\n' +
-      '自动化前先把窗口摆到确定的位置和大小很重要——否则坐标和截图会随用户拖动而变。\n' +
-      'action=move 时给 x/y/w/h（屏幕像素，不传则沿用当前值）。\n' +
-      '**故意不提供 close**：关闭应用是不可逆操作，误选一次就可能丢掉用户未保存的工作，需要关程序请让用户自己来。',
+      '窗口管理：focus / maximize / minimize / restore / move / topmost / untopmost / wait / info。\n自动化前先把窗口摆到固定位置与大小，否则坐标和截图会随用户拖动漂移。move 可给 x/y/w/h（缺省沿用当前值）。\n**不提供 close**：关程序不可逆，需要关闭请让用户自己来。',
     parameters: {
       type: 'object',
       properties: {
@@ -1231,12 +1160,7 @@ export function apply(ctx, config) {
   const lookTool = {
     name: 'computer_look',
     description:
-      '**看一眼**：mode="image" 截取窗口/桌面得到干净原图（用 read_image 直接看布局）；' +
-      'mode="text" 读某个矩形区域的文字（OCR）。\n' +
-      '和 computer_scan 的区别：scan 返回候选表+标注图，look 给的是**没有标注的原始画面**，' +
-      '适合判断"这界面上到底有什么"、确认区域长相、或读出列表内容。\n' +
-      'image 模式返回的 x,y 是图片左上角在屏幕上的坐标：图内像素 (px,py) → 屏幕 (x+px, y+py)。\n' +
-      'text 模式的 rect 是**相对窗口客户区**的 "x,y,w,h"。OCR 会认错字（老师→老丝），关键值别整句比对。',
+      '看一眼。mode="image"：截窗口/桌面拿干净原图（用 read_image 看布局）；mode="text"：OCR 读矩形区域。\n· 与 scan 的区别：scan 给候选表+标注图，look 给**没有标注的原始画面**，适合判断「界面上到底有什么」或读列表内容。\n· image 返回图片左上角屏幕坐标：图内 (px,py) → 屏幕 (x+px, y+py)；text 的 rect 相对窗口客户区。\n· text 可带 expect 做校验（已归一化全半角与易混字），别自己比字符串。',
     parameters: {
       type: 'object',
       properties: {
