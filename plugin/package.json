@@ -1,0 +1,62 @@
+{
+  "name": "dsh-lens-computer-control",
+  "version": "0.9.0",
+  "private": false,
+  "description": "零第三方依赖的 Windows 电脑控制引擎：多通道识别（UIA/OCR/实心色块/表格投影/文字网格/模板锚点），模型只选候选编号，坐标全部由本地引擎计算；支持坐标检验（绿框+放大镜自检）、拖动、人类化输入、批量填表、坐标网格、多步流程编排。",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "computer-control",
+    "computer-use",
+    "desktop-automation",
+    "rpa",
+    "windows",
+    "ocr",
+    "uiautomation",
+    "self-drawn-ui",
+    "gui-agent"
+  ],
+  "author": "David",
+  "license": "MIT",
+  "type": "module",
+  "os": [
+    "win32"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "market.json",
+    "bin/lens.exe",
+    "bin/lenshud.exe",
+    "native/**/*.cs",
+    "examples/*.txt",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-slots", "@deepseek-ai/dsh-client-ui-settings"]
+    }
+  }
+}

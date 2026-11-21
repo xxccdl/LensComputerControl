@@ -1,0 +1,16 @@
+# PPT 手搓式流程：新建文本框 → 输入文字 → 拖动调整位置
+# 坐标用 w 前缀表示「相对窗口客户区原点」，窗口挪位置也不用改流程
+window Workbench
+focus
+
+# 1) 在画布上拖出一个 320x80 的文本框
+drag from=w220,514 to=w540,594 duration=700 settle=300
+
+# 2) 输入文字（对象已选中，键盘直接落到它身上）
+type text=季度报告 settle=300
+
+# 3) 把它往右下挪一点
+drag from=w260,544 to=w380,594 duration=600 settle=400
+
+# 4) 确认画面确实变了
+verify expect=changed

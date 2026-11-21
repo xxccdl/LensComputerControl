@@ -1,0 +1,37 @@
+# 微信发消息：走搜索框，比在会话列表里翻找可靠得多
+# 用法：lens run --flow flows/wechat-send.txt
+# 或 computer_run { steps: [...] } 里逐行传入
+#
+# 为什么用 Ctrl+F 而不是点会话列表：
+#   微信是 Qt 自绘窗口，UIA 基本为空，会话名只能靠 OCR 认，
+#   而 Windows OCR 会认错（老师→老丝、取消→取肖），拿错词去匹配就会点错会话。
+#   搜索框是"输入什么就筛什么"，不依赖 OCR，稳得多。
+
+window 微信
+focus
+sleep ms=300
+
+# 打开搜索面板（微信 4.x 实测 Ctrl+F 有效）
+key combo=ctrl+f
+sleep ms=400
+
+# 输入联系人名（改成你要找的人）
+type text=文件传输助手
+sleep ms=600
+
+# 回车进入第一个搜索结果（会话）
+key combo=enter
+sleep ms=500
+
+# 点一下输入框，确保焦点在输入区
+click x=900 y=900
+sleep ms=200
+
+# 发消息
+type text=这是一条由 lens 自动发送的测试消息
+sleep ms=300
+key combo=enter
+sleep ms=300
+
+# 核验界面有变化（消息发出去了）
+verify expect=changed

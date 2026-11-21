@@ -1,0 +1,6 @@
+# 修复 id 冲突：当前预设里 tool-plugin-market 这个 id 被 @deepseek-ai/dsh-plugin-market/tools
+# 覆盖，导致提供 ask-publish-plugin / plugin_publish 的 @deepseek-ai/dsh-tool-plugin-market
+# 没能挂载。这里用独立 id 把它补挂上去。
+- insert:
+    - id: lens-publish-tools
+      name: '@deepseek-ai/dsh-tool-plugin-market'

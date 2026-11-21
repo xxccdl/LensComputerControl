@@ -1,0 +1,6 @@
+- insert:
+    - id: lens-computer-control
+      name: 'dsh-lens-computer-control'
+      config:
+        timeoutMs: 25000
+        hudPort: 45871

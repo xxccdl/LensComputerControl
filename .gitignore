@@ -1,0 +1,38 @@
+# æ„å»ºäº§ç‰© / æœ¬åœ°äº§ç‰©
+build/
+dist/
+reports/
+compat/
+testapp/
+broom-holder/
+
+# è°ƒè¯•ä¸å®éªŒç›®å½•ï¼ˆä¸è¿›ä»“åº“ï¼‰
+_probe/
+_dev/
+.lens-caps/
+
+# æœºå¯†ï¼šnpm token ç­‰
+.npmrc*
+*.bak
+*.bak-*
+
+# æ ¹ç›®å½•çš„ä¸´æ—¶æˆªå›¾ / æ¼”ç¤ºæ–‡ä»¶
+/*.png
+/*.pptx
+/*.gif
+/*.mp4
+
+# ä¾èµ–ä¸é”æ–‡ä»¶
+node_modules/
+pnpm-lock.yaml
+
+# ÒıÇæÔËĞĞÆÚ×´Ì¬
+plugin/bin/state/
+
+# ¿ª·¢ÆÚÁ÷³Ì½Å±¾
+flows/
+
+# .NET ÖĞ¼ä²úÎï
+obj/
+bin/obj/
+*.nuget.*

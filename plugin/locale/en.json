@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Lens Computer Control",
+    "description": "Zero-dependency native desktop control engine: multi-channel discovery for self-drawn windows (UIA / accessibility / OCR / solid colour blocks / table projection / template anchors). The model only picks candidate ids; every click coordinate is computed locally and verified by pixel diff."
+  }
+}

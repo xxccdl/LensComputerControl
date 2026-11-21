@@ -1,0 +1,21 @@
+# 复杂表格填写：按单元格定位逐格写入，最后断言某格内容真的出现了
+window Workbench
+focus
+
+click cell=2,1 settle=200
+type text=张三
+
+click cell=2,2 settle=200
+type text=研发部
+
+click cell=2,3 settle=200
+type text=E10086
+
+click cell=3,1 settle=200
+type text=李四
+
+# 取消选中，让格子恢复普通配色（选中格是白字压蓝底，OCR 读不出）
+key combo=escape settle=300
+
+# 断言语义：界面里现在应该能找到「研发部」
+assert text=研发部
