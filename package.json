@@ -55,6 +55,7 @@
     "bin/lens.exe",
     "bin/lenshud.exe",
     "native/**/*.cs",
+    "native/mac/*.swift",
     "examples/*.txt",
     "README.md",
     "LICENSE"

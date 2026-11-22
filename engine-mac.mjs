@@ -16,8 +16,8 @@
  *   · 没有 HUD 浮层（lenshud.exe 是 Windows 实现），HUD 只在 Web 面板里；
  *   · scroll / drag / 遮挡检测尚未实现，会返回 NOT_IMPLEMENTED。
  */
-import { execFile, spawn } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { execFile, spawn, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -158,6 +158,150 @@ async function windowAtPoint(x, y) {
   } catch {
     return null
   }
+}
+
+// ---------------------------------------------------------------- OCR
+/**
+ * macOS 的 OCR 只有 Vision 一条路，且只能从 Swift 调。三级回退：
+ *   1. 已有编译好的 bin/ocr-mac（或缓存里的）→ 直接用
+ *   2. 有 native/mac/ocr-mac.swift 且系统有 swiftc → 编译一次缓存起来
+ *   3. 系统有 shortcuts 且存在同名快捷指令（默认 LensOCR）→ 借它
+ * 都不可用时返回 null，上层降级成"没有文字通道"，而不是让整个 scan 失败。
+ */
+let ocrHelperPath = null
+let ocrProbed = false
+
+function ocrDirectories() {
+  const here = dirname(new URL(import.meta.url).pathname)
+  return [
+    join(here, 'bin', 'ocr-mac'),
+    join(TMP, 'lens-mac-ocr', 'ocr-mac'),
+  ]
+}
+
+function probeOcrHelper() {
+  if (ocrProbed) return ocrHelperPath
+  ocrProbed = true
+  for (const p of ocrDirectories()) {
+    if (existsSync(p)) {
+      ocrHelperPath = p
+      return p
+    }
+  }
+  // 尝试编译：只在系统有 swiftc 时做，一次之后就复用缓存
+  const here = dirname(new URL(import.meta.url).pathname)
+  const swiftSrc = join(here, 'native', 'mac', 'ocr-mac.swift')
+  const hasSwiftc = spawnSync('swiftc', ['--version'], { encoding: 'utf8' })
+  if (hasSwiftc.status === 0 && existsSync(swiftSrc)) {
+    const outDir = join(TMP, 'lens-mac-ocr')
+    mkdirSync(outDir, { recursive: true })
+    const outBin = join(outDir, 'ocr-mac')
+    const build = spawnSync('swiftc', ['-O', swiftSrc, '-o', outBin], { encoding: 'utf8' })
+    if (build.status === 0 && existsSync(outBin)) {
+      ocrHelperPath = outBin
+      return outBin
+    }
+  }
+  return null
+}
+
+/** 跑 OCR，返回 { words:[{text,x,y,w,h,conf}], source } 或 null。 */
+async function ocrImage(pngPath) {
+  const helper = probeOcrHelper()
+  if (helper) {
+    try {
+      const { stdout } = await run(helper, [pngPath], { maxBuffer: 16 * 1024 * 1024 })
+      const j = JSON.parse(String(stdout || '{}'))
+      if (j && j.ok) return { words: j.words || [], source: 'vision-helper', size: { w: j.imageWidth, h: j.imageHeight } }
+    } catch {
+      /* 落到 shortcuts */
+    }
+  }
+  // 回退：shortcuts（需要用户先建一个"从图片提取文本"的快捷指令）
+  const name = process.env.LENS_OCR_SHORTCUT || 'LensOCR'
+  try {
+    const { stdout } = await run('shortcuts', ['run', name, '-i', pngPath], { maxBuffer: 8 * 1024 * 1024 })
+    const text = String(stdout || '').trim()
+    if (text) {
+      return { words: parseShortcutText(text), source: 'shortcuts', size: null }
+    }
+  } catch {
+    /* 没有就返回 null */
+  }
+  return null
+}
+
+/** shortcuts 只能回纯文本（没有坐标）；按行切成词，框给整图占位，仅够 look/mode:text 用。 */
+function parseShortcutText(text) {
+  return String(text)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => ({ text: line, x: 0, y: 0, w: 0, h: 0, conf: 0.5, noBox: true }))
+}
+
+/** 词 → 行：按纵向中心聚类，同一行的词按 x 排序后拼起来。 */
+function mergeWordsIntoLines(words) {
+  const items = words.filter((w) => w && w.text)
+  if (!items.length) return []
+  const sorted = [...items].sort((a, b) => a.y - b.y || a.x - b.x)
+  const lines = []
+  for (const w of sorted) {
+    const centerY = w.y + w.h / 2
+    let line = lines.find((l) => Math.abs(l.centerY - centerY) <= Math.max(6, (l.h + w.h) / 3))
+    if (!line) {
+      line = { words: [], centerY, x1: w.x, y1: w.y, x2: w.x + w.w, y2: w.y + w.h, h: w.h }
+      lines.push(line)
+    }
+    line.words.push(w)
+    line.x1 = Math.min(line.x1, w.x)
+    line.y1 = Math.min(line.y1, w.y)
+    line.x2 = Math.max(line.x2, w.x + w.w)
+    line.y2 = Math.max(line.y2, w.y + w.h)
+    line.h = Math.max(line.h, w.h)
+  }
+  return lines.map((l) => {
+    const words = [...l.words].sort((a, b) => a.x - b.x)
+    return {
+      text: words.map((w) => w.text).join(''),
+      x: l.x1,
+      y: l.y1,
+      w: l.x2 - l.x1,
+      h: l.y2 - l.y1,
+      words: words.length,
+      conf: Number((words.reduce((s, w) => s + (w.conf || 0), 0) / Math.max(1, words.length)).toFixed(3)),
+    }
+  })
+}
+
+/** 归一化：全角→半角、去空白、易混字统一（与 Windows 侧的 expect 比对口径一致）。 */
+function normalizeText(s) {
+  return String(s || '')
+    .replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/\s+/g, '')
+    .replace(/[oO〇]/g, '0')
+    .replace(/[lI|]/g, '1')
+    .replace(/[Ss]/g, '5')
+    .replace(/[Bb]/g, '8')
+}
+
+/** 粗略相似度：公共字符占比（够用于"我刚填进去的内容对不对"）。 */
+function similarity(a, b) {
+  const x = normalizeText(a)
+  const y = normalizeText(b)
+  if (!x && !y) return 1
+  if (!x || !y) return 0
+  const pool = new Map()
+  for (const ch of y) pool.set(ch, (pool.get(ch) || 0) + 1)
+  let hit = 0
+  for (const ch of x) {
+    const n = pool.get(ch) || 0
+    if (n > 0) {
+      hit++
+      pool.set(ch, n - 1)
+    }
+  }
+  return Number((hit / Math.max(x.length, y.length)).toFixed(3))
 }
 
 // ---------------------------------------------------------------- 截图
@@ -372,6 +516,46 @@ async function cmdScan(argv) {
     text: c.name || null,
     score: 0.8,
   }))
+
+  // AX 树为空（Electron / Qt / 游戏）：退一步用 OCR 的文字行当候选。
+  // Windows 侧靠 WinRT OCR 兜住自绘窗口，macOS 上就靠这一层。
+  let ocrNote = null
+  if (candidates.length < 3) {
+    try {
+      const frame = { x: Math.round(win.x), y: Math.round(win.y), w: Math.round(win.w), h: Math.round(win.h) }
+      const buf2 = await captureRect(frame)
+      const tmp2 = join(TMP, `lens-scan-ocr-${process.pid}-${Date.now()}.png`)
+      writeFileSync(tmp2, buf2)
+      const ocr = await ocrImage(tmp2)
+      if (ocr) {
+        const words = ocr.words.map((w) => (w.noBox ? w : { ...w, x: w.x + frame.x, y: w.y + frame.y }))
+        for (const line of mergeWordsIntoLines(words)) {
+          if (!line.text || line.w < 4) continue
+          candidates.push({
+            id: candidates.length + 1,
+            channel: 'ocr',
+            kind: 'text',
+            box: { x: line.x, y: line.y, w: line.w, h: line.h },
+            screen: {
+              x: line.x,
+              y: line.y,
+              w: line.w,
+              h: line.h,
+              cx: Math.round(line.x + line.w / 2),
+              cy: Math.round(line.y + line.h / 2),
+            },
+            text: line.text,
+            score: 0.7,
+          })
+        }
+        ocrNote = `ocr=${line0Count(candidates)} via ${ocr.source}`
+      } else {
+        ocrNote = 'ocr=unavailable'
+      }
+    } catch (e) {
+      ocrNote = 'ocr=error'
+    }
+  }
 
   const overlay = arg(argv, '--overlay', null)
   if (overlay) {
@@ -626,6 +810,75 @@ async function cmdWindow(argv) {
     frame: after ? { x: Math.round(after.x), y: Math.round(after.y), w: Math.round(after.w), h: Math.round(after.h) } : null,
     notes: ['engine=mac'],
   })
+  return 0
+}
+
+/** read：截图 → 裁 rect → OCR → 合并成行，可选 expect 校验。 */
+async function cmdRead(argv) {
+  const key = arg(argv, '--window', null)
+  const rectArg = arg(argv, '--rect', null)
+  const expect = arg(argv, '--expect', null)
+  const list = key ? await listWindows() : []
+  const win = key ? pickWindow(list, key) : null
+  if (key && !win) {
+    emit({ ok: false, code: 'WINDOW_NOT_FOUND', message: `window not found: ${key}` })
+    return 3
+  }
+  const origin = win
+    ? { x: Math.round(win.x), y: Math.round(win.y), w: Math.round(win.w), h: Math.round(win.h) }
+    : await screenRect()
+  const buf = await captureRect(win ? origin : null)
+  let img = decodePng(buf)
+  let rect = origin
+  if (rectArg) {
+    const [rx, ry, rw, rh] = String(rectArg).split(',').map((v) => parseInt(v, 10))
+    if (![rx, ry, rw, rh].every((v) => Number.isFinite(v)) || rw <= 0 || rh <= 0) {
+      emit({ ok: false, code: 'BAD_ARGS', message: '--rect 需要 x,y,w,h' })
+      return 2
+    }
+    const cropped = cropRect(img, { x: rx, y: ry, w: rw, h: rh }, origin)
+    if (!cropped) {
+      emit({ ok: false, code: 'RECT_OUTSIDE', message: 'rect 完全在截图范围外', rect: { x: rx, y: ry, w: rw, h: rh }, origin })
+      return 2
+    }
+    img = cropped.img
+    rect = cropped.rect
+  }
+  const tmp = join(TMP, `lens-read-${process.pid}-${Date.now()}.png`)
+  writeFileSync(tmp, encodePng(img))
+  const ocr = await ocrImage(tmp)
+  if (!ocr) {
+    emit({
+      ok: false,
+      code: 'OCR_UNAVAILABLE',
+      message: 'macOS 上没有可用的 OCR：装 Xcode 命令行工具（提供 swiftc）后会自动编译内置 Vision 工具，或者建一个名为 LensOCR 的快捷指令',
+      hint: '也可以继续用 computer_scan 的 AX 文本，或 computer_vision 切块定位',
+    })
+    return 6
+  }
+  // OCR 坐标是图内像素 → 加上裁剪原点变回屏幕坐标
+  const words = ocr.words.map((w) => (w.noBox ? w : { ...w, x: w.x + rect.x, y: w.y + rect.y }))
+  const lines = mergeWordsIntoLines(words)
+  const text = lines.map((l) => l.text).join('\n')
+  const payload = {
+    ok: true,
+    text,
+    rect,
+    lines,
+    source: ocr.source,
+    notes: ['engine=mac'],
+  }
+  if (expect !== undefined && expect !== null) {
+    const target = String(expect)
+    const best = lines
+      .map((l) => ({ line: l, sim: similarity(l.text, target) }))
+      .sort((a, b) => b.sim - a.sim)[0]
+    payload.expect = target
+    payload.similarity = best ? best.sim : 0
+    payload.match = !!best && best.sim >= 0.75
+    if (best) payload.best = best.line.text
+  }
+  emit(payload)
   return 0
 }
 
@@ -1167,6 +1420,11 @@ async function cmdVision(argv) {
   return 0
 }
 
+/** 统计 OCR 通道贡献了多少候选（日志用）。 */
+function line0Count(candidates) {
+  return candidates.filter((c) => c.channel === 'ocr').length
+}
+
 function cmdUnsupported(cmd) {
   emit({ ok: false, code: 'NOT_IMPLEMENTED', message: `macOS 引擎（实验性）暂不支持 ${cmd}` })
   return 4
@@ -1189,6 +1447,7 @@ const USAGE = `engine-mac.mjs — Lens 的 macOS 引擎（实验性）
 
   node engine-mac.mjs scroll --delta -3 [--x X --y Y] [--horizontal]
   node engine-mac.mjs drag --from x,y --to x,y [--duration 600]
+  node engine-mac.mjs read --window 名称 [--rect x,y,w,h] [--expect 期望文本]   # OCR
   node engine-mac.mjs verify [--window 名称]     # 与上一张快照做像素差分
   node engine-mac.mjs run --text "window 微信
     focus
@@ -1226,6 +1485,8 @@ async function main() {
       return cmdWindow(argv)
     case 'cap':
       return cmdCap(argv)
+    case 'read':
+      return cmdRead(argv)
     case 'vision':
       return cmdVision(argv)
     case 'run':
@@ -1273,4 +1534,8 @@ export {
   diffImages,
   pngSize,
   parseScriptLine,
+  mergeWordsIntoLines,
+  normalizeText,
+  similarity,
+  parseShortcutText,
 }

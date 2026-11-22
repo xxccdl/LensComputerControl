@@ -1273,7 +1273,7 @@ export function apply(ctx, config) {
           type: 'string',
           enum: ['auto', 'screen', 'client'],
           description:
-            'rect 的坐标系：screen=屏幕绝对坐标，client=窗口客户区相对，auto=按数值自动判断（默认）。返回里会用 rectSpace 告诉你最终按哪套算的。',
+            'rect 的坐标系：screen=屏幕绝对坐标，client=窗口客户区相对，auto=按数值自动判断（默认）。Windows 引擎内部只吃客户区坐标，会自动换算；macOS 引擎直接吃屏幕坐标，不做二次换算。返回里用 rectSpace 告诉你最终按哪套算的。',
         },
         expect: {
           type: 'string',
@@ -1347,7 +1347,7 @@ export function apply(ctx, config) {
               useScreen = looksScreen && !fitsClient
             }
           }
-          if (useScreen) {
+          if (useScreen && plan.engine === 'exe') {
             const info = await run(['info', '--json'])
             const list = Array.isArray(info) ? info : info?.windows || []
             const match = list.find((it) => String(it.title || '').includes(w) || String(it.process || '').includes(w))

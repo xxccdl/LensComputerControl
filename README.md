@@ -93,7 +93,7 @@ macOS 上没有 Win32/UIA，`lens.exe` 跑不了，于是另带一个**零依赖
 | 能力 | Windows | macOS（实验性） |
 |---|---|---|
 | 窗口列表 `computer_windows` | Win32 枚举 | JXA / System Events |
-| 候选扫描 `computer_scan` | 六通道（uia/ocr/实心/表格/文字网格/模板） | **仅 AX 通道**（Accessibility 树），AX 为空时返回 L1 能力等级 |
+| 候选扫描 `computer_scan` | 六通道（uia/ocr/实心/表格/文字网格/模板） | AX 通道 + **OCR 通道**（AX 为空时自动补文字行） |
 | 坐标检验 `computer_check` | GDI+ 绘制 | Node 内解 PNG + 画框 + 最近邻放大（自己实现编解码） |
 | 切块定位 `computer_vision` | 引擎绘制分格图 | 同样支持，`cells` 模式带编号与坐标 |
 | 点击 / 输入 / 按键 / 粘贴 | SendInput / PostMessage / 剪贴板 | System Events `click at`、`keystroke`、`pbcopy + cmd+v`（粘完写回原剪贴板） |
@@ -116,7 +116,12 @@ node engine-mac.mjs scan --window Safari --overlay /tmp/scan.png
 node engine-mac.mjs vision --mode cells --cells 9 --out /tmp/cells.png
 ```
 
-已知限制：AX 树在 Electron / Qt / 游戏里通常为空，这类窗口只能靠 `computer_vision` 切块 + `computer_check` 预览。没有内置 OCR 通道（Windows 侧用 WinRT OCR），所以 `computer_look mode:"text"` 在 macOS 上走不通，改用 `scan` 的 AX 文本或 `vision` 切块。
+已知限制：AX 树在 Electron / Qt / 游戏里通常为空，这类窗口只能靠 `computer_vision` 切块 + `computer_check` 预览。OCR 走三级回退：① 已编译的 `bin/ocr-mac`（或缓存）→ ② 若系统有 `swiftc`，首次调用时自动编译随包的 `native/mac/ocr-mac.swift`（Vision 框架，约 120 行）→ ③ 借名为 `LensOCR` 的快捷指令（`shortcuts run`）。三者都没有时 `computer_look mode:"text"` 返回 `OCR_UNAVAILABLE`，`scan` 会降级成只有 AX 候选。
+
+```bash
+# 手动预编译（可选，省掉首次调用的编译延迟）
+swiftc -O native/mac/ocr-mac.swift -o bin/ocr-mac
+```
 
 ## 已知限制
 
