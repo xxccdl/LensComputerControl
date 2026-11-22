@@ -11,6 +11,8 @@ on:
 
 jobs:
   publish:
+    # 只有仓库变量 NPM_TRUSTED_PUBLISHING=true 时才跑（在 npm 包页面配好 Trusted Publishing 后打开）
+    if: vars.NPM_TRUSTED_PUBLISHING == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
