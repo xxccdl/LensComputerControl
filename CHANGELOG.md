@@ -2,6 +2,17 @@
 
 版本号规则：`0.x` 阶段按「新增平台 / 破坏性改动 = 次版本」，其余补丁位。
 
+## 0.10.1
+
+修 macOS 实测报告里的 P0（明细见 `docs/macos-实测修复.md`）：点击、按键、粘贴、滚动、拖动全链路，
+OCR 路径编码，`vision`/`grid` 不可用，`read` 的 rect 坐标系，异常被吞成 `[]`，超时不外露。
+
+- 输入层统一走 `CGEvent`（HID tap）：点击支持左右中键与重复次数，组合键有 keycode 表，粘贴 180ms 后才还原剪贴板
+- `thisDir()` 用 `fileURLToPath`，安装路径含空格（`Application Support`）时 OCR 不再永久不可用
+- 引擎补 `grid` / `zoom` 子命令；`scan` 与 `click --id` 共用 `collectCandidates()`（编号空间一致）
+- `pickWindow` 认数字 hwnd；窗口动作补 `maximize`，`move` 必回 `frame`
+- AX 遍历限流（深度 8 / 150 节点），超时回 `ENGINE_TIMEOUT` 并给建议
+- 工具返回值统一过 `toJsonSafe()`：Buffer/NaN/undefined 不再让宿主报 "not lossless JSON"
 ## 0.10.0
 
 ### 新平台

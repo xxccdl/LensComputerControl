@@ -174,6 +174,36 @@ function describe(w) {
 /** 容错解析：先整体 parse，失败则截取第一个平衡的 {…} 再试。
  *  实测「点了登录按钮后窗口立刻销毁」时 stdout 可能夹杂半截输出，一刀切 JSON.parse 会把
  *  一次成功的动作报成失败（B3）。 */
+/**
+ * 工具返回值要先能过宿主的 "lossless JSON" 校验：
+ * Buffer → 只留长度，undefined/function 直接丢，NaN/Infinity → null。
+ * macOS 实测里 computer_act 的预览与 computer_vision 都栽在这上面（P0-3 / P0-4）。
+ */
+function toJsonSafe(value, depth = 0) {
+  if (value === null || value === undefined) return value === undefined ? undefined : null
+  if (depth > 8) return '[deep]'
+  const t = typeof value
+  if (t === 'string' || t === 'boolean') return value
+  if (t === 'number') return Number.isFinite(value) ? value : null
+  if (t === 'function' || t === 'symbol' || t === 'bigint') return undefined
+  if (Buffer.isBuffer(value)) return `[buffer ${value.length}B]`
+  if (Array.isArray(value)) {
+    return value.map((v) => {
+      const safe = toJsonSafe(v, depth + 1)
+      return safe === undefined ? null : safe
+    })
+  }
+  const out = {}
+  for (const k of Object.keys(value)) {
+    const safe = toJsonSafe(value[k], depth + 1)
+    if (safe !== undefined) out[k] = safe
+  }
+  return out
+}
+
+/** 仅供测试：把内部清洗函数暴露出去。 */
+const toJsonSafeForTest = (v) => toJsonSafe(v)
+
 function parseLoose(text) {
   // 引擎重定向输出时常带一个 UTF-8 BOM，JSON.parse 会直接抛错 —— 先剥掉
   const t = String(text || '').replace(/^\uFEFF/, '').trim()
@@ -217,6 +247,8 @@ function parseLoose(text) {
  * macOS:   随包的 engine-mac.mjs，用当前 Node 执行（Electron 下靠 ELECTRON_RUN_AS_NODE 转 Node 语义）。
  * 抽成纯函数是为了能在非 macOS 机器上直接测这段判断。
  */
+export { toJsonSafeForTest }
+
 export function enginePlan(platform, here, cfgExePath) {
   if (platform === 'darwin') {
     const script = join(here, 'engine-mac.mjs')
@@ -257,7 +289,11 @@ export function apply(ctx, config) {
     if (!result || typeof result !== 'object') return
     const code = String(result.code || '')
     const msg = String(result.message || result.error || '')
-    if (/PERMISSION|not authorized|not permitted|TCC|辅助功能|screen recording|屏幕录制/i.test(code + ' ' + msg)) {
+    if (
+      /PERMISSION|not authorized|not permitted|TCC|辅助功能|screen recording|屏幕录制|JXA|osascript|not allowed|-1700|EACCES|ENOENT|ENGINE_TIMEOUT/i.test(
+        code + ' ' + msg,
+      )
+    ) {
       hud.permission = { at: Date.now(), code, message: msg.slice(0, 200) }
     } else if (result.ok === true) {
       hud.permission = null
@@ -286,11 +322,22 @@ export function apply(ctx, config) {
         args,
         { timeout: timeoutMs, windowsHide: true, maxBuffer: 64 * 1024 * 1024, env: env || process.env },
         (err, stdout, stderr) => {
+          // P0-11：超时/被杀掉的命令要明确说是超时，而不是丢一句 "Command failed: ..."
+          if (err && (err.killed || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT')) {
+            resolve({
+              ok: false,
+              code: 'ENGINE_TIMEOUT',
+              message: `引擎超时（${timeoutMs}ms）：${String(args[0] || '')} 没在时限内返回`,
+              hint: '窗口越大 AX 遍历越慢；把 设置 → Lens 电脑控制 → 单次调用超时 调大，或改用 computer_vision 切块。',
+              args: args.slice(0, 6).join(' '),
+            })
+            return
+          }
           const out = String(stdout || '').trim()
           if (out) {
             const parsed = parseLoose(out)
             if (parsed !== null) {
-              resolve(parsed)
+              resolve(toJsonSafe(parsed))
               return
             }
             resolve({
@@ -1302,6 +1349,14 @@ export function apply(ctx, config) {
         const wv = ['wait', '--window', w, '--for', String(args?.condition || 'exists')]
         wv.push('--timeout', String(args?.timeout || 8000))
         return run(wv)
+      }
+      if (plan.engine !== 'exe' && act === 'move' && args?.x === undefined && args?.y === undefined) {
+        return {
+          ok: false,
+          code: 'BAD_ARGS',
+          message: 'move 需要 x 或 y',
+          hint: 'computer_window { action:"move", x:200, y:150, w:900, h:600 }',
+        }
       }
       const argv = ['window', '--window', w, '--action', act]
       for (const k of ['x', 'y', 'w', 'h']) if (args?.[k] !== undefined) argv.push(`--${k}`, String(args[k]))
