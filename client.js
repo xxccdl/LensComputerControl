@@ -68,6 +68,9 @@ window.__ModuleLoader__.load({
   border:1px solid color-mix(in srgb,var(--lens-accent) 26%,transparent)}
 .lensHud.isStopped .lensState{color:#fca5a5;background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.28)}
 .lensHud.isOffline .lensState{color:var(--lens-fg3);background:rgba(148,163,184,.1);border-color:rgba(148,163,184,.18)}
+.lensHud.hasPerm .lensState{color:color-mix(in srgb,#fbbf24 72%,var(--lens-fg));
+  background:color-mix(in srgb,#fbbf24 13%,transparent);border-color:color-mix(in srgb,#fbbf24 30%,transparent)}
+.lensHud.hasPerm .lensCard::before{background:linear-gradient(145deg,rgba(251,191,36,.5),rgba(251,191,36,.06) 45%,rgba(251,191,36,.3))}
 .lensGrip{display:flex;flex-direction:column;gap:2px;margin-left:2px;opacity:.4;flex:0 0 auto}
 .lensGrip i{display:block;width:2px;height:2px;border-radius:50%;background:currentColor;box-shadow:5px 0 0 currentColor,-5px 0 0 currentColor}
 .lensChev{color:var(--lens-fg3);display:flex;transition:transform .18s ease;flex:0 0 auto}
@@ -340,6 +343,23 @@ window.__ModuleLoader__.load({
       const stopped = state.stopped === true
       const rows = state.timeline || []
       const last = state.lastScan
+      // 权限（macOS 的 TCC）没给时，卡片要说"缺授权"而不是"离线"——
+      // 这两种情况用户要做的事完全不同。
+      const permission = state.permission || null
+      const platform = state.platform || ''
+      const engineLabel = state.engineLabel || ''
+      const hudMode = state.hudMode || 'native'
+
+      const stateText = offline
+        ? 'OFFLINE'
+        : permission
+          ? 'NO PERM'
+          : stopped
+            ? 'STOPPED'
+            : last
+              ? 'L' + (last.level || '2')
+              : 'READY'
+      const dotClass = 'lensDot' + (offline || permission ? ' off' : last ? '' : ' idle')
 
       const hit = function (path) {
         setBusy(true)
@@ -365,11 +385,8 @@ window.__ModuleLoader__.load({
           .finally(function () { setBusy(false) })
       }
 
-      const dotClass = 'lensDot' + (offline ? ' idle' : stopped ? ' off' : '')
-      const stateText = offline ? 'OFFLINE' : stopped ? 'STOPPED' : (last && last.level ? last.level : 'READY')
-
       const rootClass = 'lensHud' + (collapsed ? ' isCollapsed' : '') +
-        (stopped ? ' isStopped' : '') + (offline ? ' isOffline' : '')
+        (stopped ? ' isStopped' : '') + (offline ? ' isOffline' : '') + (permission ? ' hasPerm' : '')
 
       // 拖动后的位置用 left/top 覆盖默认的 right/bottom
       const posStyle = pos ? { left: pos.x + 'px', top: pos.y + 'px', right: 'auto', bottom: 'auto' } : null
@@ -409,13 +426,23 @@ window.__ModuleLoader__.load({
               h('span', { className: 'lensWin', title: last.window }, last.window || '未命名窗口'),
               last.candidates != null
                 ? h('span', { className: 'lensChip' }, last.candidates + ' 候选')
+                : null,
+              last.byChannel && Object.keys(last.byChannel).length
+                ? h('span', { className: 'lensChip muted' }, Object.keys(last.byChannel).join('/'))
                 : null))
         : h('div', { className: 'lensVoid' },
             h('span', { className: 'lensRing' }),
-            h('div', { className: 'lensVoidText' },
-              offline
-                ? ['Lens 引擎未连上', h('br'), '检查插件 Host 半是否启动']
-                : [h('b', null, '待命中'), ' · 还没有扫描过窗口']))
+            permission
+              ? h('div', { className: 'lensVoidText' },
+                  h('b', null, '缺少系统授权'),
+                  h('br'),
+                  platform === 'darwin'
+                    ? '系统设置 → 隐私与安全性：勾选「辅助功能」和「屏幕录制」'
+                    : '引擎报告权限不足，检查安全软件是否拦截了模拟输入')
+              : h('div', { className: 'lensVoidText' },
+                  offline
+                    ? ['Lens 引擎未连上', h('br'), '检查插件 Host 半是否启动']
+                    : [h('b', null, '待命中'), ' · 还没有扫描过窗口']))
 
       // ── 待确认的坐标点击：模型点了坐标但还没落点，等这里的人确认 ──
       const pending = state.pending || []
@@ -441,8 +468,16 @@ window.__ModuleLoader__.load({
         : null
 
       const foot = h('div', { className: 'lensFoot' },
-        h('span', { className: 'lensHint' },
-          offline ? '引擎离线' : stopped ? '已拦截所有 computer_* 调用' : 'AI 随时可以接管桌面'),
+        h('span', { className: 'lensHint', title: engineLabel || undefined },
+          offline
+            ? '引擎离线'
+            : stopped
+              ? '已拦截所有 computer_* 调用'
+              : permission
+                ? '授权后可用 · 点击查看设置'
+                : platform === 'darwin'
+                  ? 'macOS 实验性 · 浮层仅 Web'
+                  : 'AI 随时可以接管桌面'),
         h('button', {
           className: 'lensStop' + (stopped ? ' armed' : ''),
           disabled: busy || offline,
@@ -475,6 +510,15 @@ window.__ModuleLoader__.load({
     }
 
     const SET_CSS = `
+.lensDiag{border:1px solid var(--dsw-alias-border-l2,#d8dee9);border-radius:10px;padding:10px 12px;margin:12px 0 16px;
+  background:color-mix(in srgb,var(--dsw-alias-bg-layer-2,#f5f7fa) 60%,transparent)}
+.lensDiagHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;
+  font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary,#1b2330)}
+.lensDiagRow{display:flex;gap:10px;padding:3px 0;font-size:12px;line-height:1.5}
+.lensDiagKey{flex:0 0 78px;color:var(--dsw-alias-label-tertiary,#6b7686)}
+.lensDiagVal{flex:1 1 auto;color:var(--dsw-alias-label-secondary,#3d4a5c);word-break:break-all;
+  font-variant-numeric:tabular-nums}
+.lensDiagNote{margin-top:6px;font-size:11.5px;line-height:1.55;color:var(--dsw-alias-label-tertiary,#6b7686)}
 .lensSet{display:flex;flex-direction:column;gap:18px;font-size:13px;color:var(--dsw-alias-label-primary,#e6eefc)}
 .lensSet h2{font-size:18px;line-height:1.4;font-weight:600;margin:0}
 .lensSet .lensRow{display:flex;align-items:flex-start;gap:16px;padding:2px 0}
@@ -630,6 +674,7 @@ window.__ModuleLoader__.load({
         h('style', null, SET_CSS),
         h('h2', null, 'Lens 电脑控制'),
         h('div', { className: 'lensRowHint' }, 'AI 操作桌面时的行为。改完点保存，下一次工具调用就生效（不用重启）。'),
+        h(LensDiag, null),
 
         h('div', { className: 'lensSec' }, '行为'),
         h(LensRow, {
@@ -695,6 +740,59 @@ window.__ModuleLoader__.load({
         writable ? null : h('div', { className: 'lensMsg' }, '当前配置只读（可能由配置文件托管）。'))
     }
 
+    /**
+     * 引擎诊断：一块"点一下就知道现在什么状态"的区域。
+     * 之前只能靠 HUD 卡片的小圆点猜，macOS 上还要自己分辨"没连上"和"没授权"。
+     */
+    function LensDiag(props) {
+      const [info, setInfo] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [err, setErr] = React.useState('')
+      const probe = function () {
+        setBusy(true)
+        setErr('')
+        fetch(BASE + '/status')
+          .then(function (r) { return r.json() })
+          .then(function (j) { setInfo(j) })
+          .catch(function (e) { setErr(e && e.message ? e.message : '连不上引擎') })
+          .finally(function () { setBusy(false) })
+      }
+      React.useEffect(function () { probe() }, [])
+      const row = function (k, v) {
+        return h('div', { className: 'lensDiagRow', key: k },
+          h('span', { className: 'lensDiagKey' }, k),
+          h('span', { className: 'lensDiagVal', title: typeof v === 'string' ? v : undefined }, String(v)))
+      }
+      const scan = info && info.lastScan
+      return h('div', { className: 'lensDiag' },
+        h('div', { className: 'lensDiagHead' },
+          h('span', null, '引擎诊断'),
+          h('button', {
+            type: 'button', className: 'lensGhost', disabled: busy,
+            onClick: function (e) { e.stopPropagation(); probe() },
+          }, busy ? '检测中…' : '重新检测')),
+        err
+          ? h('div', { className: 'lensMsg', 'data-tone': 'err' }, err)
+          : info
+            ? [
+                row('平台', info.platform || '-'),
+                row('引擎', info.engineLabel || info.engine || '-'),
+                row('HUD', info.hudMode === 'native' ? '原生浮层（蓝边+胶囊）' : '仅 Web 状态卡'),
+                info.permission ? row('权限', info.permission.message || info.permission.code) : null,
+                row('窗口端口', info.hudPort),
+                scan
+                  ? row('最近扫描', scan.window + ' · ' + scan.candidates + ' 候选' +
+                      (scan.byChannel ? '（' + Object.keys(scan.byChannel).join('/') + '）' : ''))
+                  : row('最近扫描', '还没有扫描过'),
+                info.engine !== 'exe'
+                  ? h('div', { className: 'lensDiagNote' },
+                      'macOS 为实验性：OCR 走 Vision 小工具（首次自动编译）或名为 LensOCR 的快捷指令；' +
+                      '系统设置 → 隐私与安全性 里要给宿主「辅助功能」和「屏幕录制」。')
+                  : null,
+              ]
+            : h('div', { className: 'lensDiagNote' }, '正在读取…'))
+    }
+
     /** 把 configForms 的 scope 包装成「字段 -> 值」的保存函数。 */
     function makeSavePatch(scope) {
       return async function savePatch(patch) {
@@ -722,7 +820,7 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       // 导出内部组件仅供本地测试直接渲染；宿主只读 inject / apply，多这一个键没有任何副作用
-      internals: { PendingCard: PendingCard, LensSettings: LensSettings, Hud: Hud },
+      internals: { PendingCard: PendingCard, LensSettings: LensSettings, LensDiag: LensDiag, Hud: Hud },
       apply(ctx) {
         ctx.slots.inject('shell.overlay', function () {
           return ctx.slots.register(

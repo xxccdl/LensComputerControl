@@ -243,6 +243,19 @@ export function apply(ctx, config) {
     startedAt: Date.now(),
     timeline: [],
     lastScan: null,
+    permission: null,
+  }
+
+  /** 权限类失败（macOS 的 TCC 授权没给）会落到这里，卡片据此显示引导而不是"离线"。 */
+  const notePermission = (result) => {
+    if (!result || typeof result !== 'object') return
+    const code = String(result.code || '')
+    const msg = String(result.message || result.error || '')
+    if (/PERMISSION|not authorized|not permitted|TCC|辅助功能|screen recording|屏幕录制/i.test(code + ' ' + msg)) {
+      hud.permission = { at: Date.now(), code, message: msg.slice(0, 200) }
+    } else if (result.ok === true) {
+      hud.permission = null
+    }
   }
 
   const record = (kind, detail, ok) => {
@@ -365,13 +378,19 @@ export function apply(ctx, config) {
     // 把宿主 pid 传给引擎（追加在末尾：第一个参数必须是命令）：它的窗口绝不能成为操作目标
     const result = await runRaw(withSettings(args).concat(['--excludePid', String(process.pid)]))
     const ok = result && result.ok !== false
+    notePermission(result)
     record(verb, label.slice(0, 90), ok)
     if (verb === 'scan' && result && result.ok) {
+      const cands = result.candidates || []
+      const byChannel = {}
+      for (const c of cands) byChannel[c.channel || '?'] = (byChannel[c.channel || '?'] || 0) + 1
       hud.lastScan = {
         at: Date.now(),
         window: result.window && result.window.title,
         level: result.capability && result.capability.level,
-        candidates: (result.candidates || []).length,
+        candidates: cands.length,
+        byChannel,
+        fingerprint: result.fingerprint,
         overlay: result.overlay,
       }
     }
@@ -1442,6 +1461,20 @@ export function apply(ctx, config) {
         timeline: hud.timeline.slice(0, 12),
         pending: pendingList(),
         hudPort,
+        // 诊断信息：UI 用它区分"没连上""没权限""没扫描过"
+        platform: process.platform,
+        engine: plan.engine,
+        engineLabel: plan.engine === 'exe' ? 'Windows 引擎 (lens.exe)' : 'macOS 引擎 (Node)',
+        enginePath: plan.engine === 'exe' ? plan.cmd : plan.pre[0],
+        hudMode: plan.engine === 'exe' ? 'native' : 'web',
+        permission: hud.permission || null,
+        settings: {
+          confirmClicks: settings.confirmClicks,
+          autoCheck: settings.autoCheck,
+          checkBox: settings.checkBox,
+          hudEnabled: settings.hudEnabled,
+          humanize: settings.humanize,
+        },
       })
       return
     }
