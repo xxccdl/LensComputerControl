@@ -1,0 +1,42 @@
+name: publish
+
+# 两种触发方式：
+#   · 推 v* 标签（推荐，配合 npm 的 Trusted Publishing，无需任何 token）
+#   · 手动 Run workflow
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC：拿这个换 npm 的短期发布凭证
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      # npm 11+ 才有 OIDC trusted publishing
+      - run: npm install -g npm@latest
+
+      - name: 跑测试
+        run: npm test
+
+      - name: 校验版本与标签一致
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          if [ "v$PKG" != "${GITHUB_REF_NAME}" ]; then
+            echo "标签 ${GITHUB_REF_NAME} 与 package.json 的 v$PKG 不一致"; exit 1
+          fi
+
+      - name: 发布
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

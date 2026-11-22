@@ -1,6 +1,6 @@
 {
   "name": "dsh-lens-computer-control",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": false,
   "description": "零第三方依赖的电脑控制引擎（Windows 全功能 / macOS 实验性）：多通道识别（UIA/OCR/实心色块/表格投影/文字网格/模板锚点），模型只选候选编号，坐标全部由本地引擎计算；支持坐标检验（绿框+放大镜自检）、拖动、人类化输入、批量填表、坐标网格、多步流程编排。",
   "keywords": [
@@ -61,6 +61,7 @@
     "native/mac/*.swift",
     "examples/*.txt",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "peerDependencies": {
