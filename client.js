@@ -133,6 +133,13 @@ window.__ModuleLoader__.load({
 .lensStop:hover:not(:disabled){background:rgba(248,113,113,.18);border-color:rgba(248,113,113,.6);
   box-shadow:0 0 18px -4px rgba(248,113,113,.45)}
 .lensStop:active:not(:disabled){transform:translateY(1px)}
+.lensPermBtn{margin-top:9px;border:1px solid color-mix(in srgb,#fbbf24 45%,transparent);
+  background:color-mix(in srgb,#fbbf24 12%,transparent);color:color-mix(in srgb,#fbbf24 72%,var(--lens-fg));
+  border-radius:8px;padding:6px 14px;font:600 11.5px/1 inherit;cursor:pointer;letter-spacing:.04em;
+  transition:all .14s ease}
+.lensPermBtn:hover:not(:disabled){background:color-mix(in srgb,#fbbf24 22%,transparent);
+  border-color:color-mix(in srgb,#fbbf24 70%,transparent)}
+.lensPermBtn:disabled{opacity:.5;cursor:default}
 .lensStop:disabled{opacity:.45;cursor:default}
 .lensStop.armed{border-color:rgba(52,211,153,.36);background:rgba(52,211,153,.1);color:color-mix(in srgb,#34d399 62%,var(--lens-fg))}
 .lensStop.armed:hover:not(:disabled){background:rgba(52,211,153,.18);border-color:rgba(52,211,153,.6);
@@ -228,7 +235,11 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'lensPending' },
         h('div', { className: 'lensPendingTop' },
           h('span', null, '待确认点击 ', h('b', null, '(' + item.x + ', ' + item.y + ')')),
-          props.more > 0 ? h('span', { className: 'lensChip muted' }, '还有 ' + props.more + ' 条') : null),
+          props.more > 0
+            ? h('span', { className: 'lensChip muted' }, '还有 ' + props.more + ' 条')
+            : props.humanOnly
+              ? h('span', { className: 'lensChip' }, '需人工确认')
+              : null),
         (cand || item.covered)
           ? h('div', { className: 'lensPendMeta' },
               cand ? h('span', { className: 'lensChip' }, '#' + cand.id + ' ' + (cand.text || '')) : null,
@@ -361,6 +372,22 @@ window.__ModuleLoader__.load({
               : 'READY'
       const dotClass = 'lensDot' + (offline || permission ? ' off' : last ? '' : ' idle')
 
+      // 申请 macOS 控制权限：打 /permissions 的 POST，系统会弹授权框
+      const askPermission = function () {
+        setBusy(true)
+        fetch(BASE + '/permissions', { method: 'POST' })
+          .then(function (r) { return r.json() })
+          .then(function (j) {
+            setState(function (s) {
+              return Object.assign({}, s, {
+                permission: j && j.granted === false ? { at: Date.now(), message: (j && j.hint) || '还没授权' } : null,
+              })
+            })
+          })
+          .catch(function () {})
+          .finally(function () { setBusy(false) })
+      }
+
       const hit = function (path) {
         setBusy(true)
         fetch(BASE + path, { method: 'POST' })
@@ -438,7 +465,15 @@ window.__ModuleLoader__.load({
                   h('br'),
                   platform === 'darwin'
                     ? '系统设置 → 隐私与安全性：勾选「辅助功能」和「屏幕录制」'
-                    : '引擎报告权限不足，检查安全软件是否拦截了模拟输入')
+                    : '引擎报告权限不足，检查安全软件是否拦截了模拟输入',
+                  platform === 'darwin'
+                    ? h('button', {
+                        type: 'button',
+                        className: 'lensPermBtn',
+                        disabled: busy,
+                        onClick: function (e) { e.stopPropagation(); askPermission() },
+                      }, busy ? '正在申请…' : '申请授权')
+                    : null)
               : h('div', { className: 'lensVoidText' },
                   offline
                     ? ['Lens 引擎未连上', h('br'), '检查插件 Host 半是否启动']
@@ -447,7 +482,7 @@ window.__ModuleLoader__.load({
       // ── 待确认的坐标点击：模型点了坐标但还没落点，等这里的人确认 ──
       const pending = state.pending || []
       const pendingCard = pending.length
-        ? h(PendingCard, { item: pending[0], more: pending.length - 1, busy: busy, onDecide: decide })
+        ? h(PendingCard, { item: pending[0], more: pending.length - 1, busy: busy, onDecide: decide, humanOnly: !!(state.settings && state.settings.humanConfirm) })
         : null
 
       const feed = rows.length
@@ -693,6 +728,11 @@ window.__ModuleLoader__.load({
         }, h(LensSwitch, { value: !!cur.confirmClicks, disabled: !writable, label: '点击前预览', onChange: function (v) { set('confirmClicks', v) } })),
 
         h(LensRow, {
+          title: '点击必须由人工确认',
+          hint: '开启后模型不能自己确认预览：令牌只能由页面右下角状态卡的「确认点击」按钮（或你）放行。适合无人值守前先收紧。',
+        }, h(LensSwitch, { value: !!cur.humanConfirm, disabled: !writable, label: '人工确认', onChange: function (v) { set('humanConfirm', v) } })),
+
+        h(LensRow, {
           title: '预览关闭时的兜底检验',
           hint: '只在上面「预览」关掉后生效：直接校验坐标，被遮挡或落在窗口外就拒绝点击。用候选 id / 网格点不受影响。',
         }, h(LensSwitch, { value: !!cur.autoCheck, disabled: !writable, label: '自动坐标检验', onChange: function (v) { set('autoCheck', v) } })),
@@ -758,6 +798,14 @@ window.__ModuleLoader__.load({
           .finally(function () { setBusy(false) })
       }
       React.useEffect(function () { probe() }, [])
+      const askPerm = function () {
+        setBusy(true)
+        fetch(BASE + '/permissions', { method: 'POST' })
+          .then(function (r) { return r.json() })
+          .then(function (j) { setInfo(function (old) { return Object.assign({}, old, { permissions: j, permission: j && j.granted === false ? { message: j.hint } : null }) }) })
+          .catch(function () {})
+          .finally(function () { setBusy(false) })
+      }
       const row = function (k, v) {
         return h('div', { className: 'lensDiagRow', key: k },
           h('span', { className: 'lensDiagKey' }, k),
@@ -778,7 +826,29 @@ window.__ModuleLoader__.load({
                 row('平台', info.platform || '-'),
                 row('引擎', info.engineLabel || info.engine || '-'),
                 row('HUD', info.hudMode === 'native' ? '原生浮层（蓝边+胶囊）' : '仅 Web 状态卡'),
-                info.permission ? row('权限', info.permission.message || info.permission.code) : null,
+                info.permission
+                  ? h('div', { className: 'lensDiagRow' },
+                      h('span', { className: 'lensDiagKey' }, '权限'),
+                      h('span', { className: 'lensDiagVal' }, info.permission.message || info.permission.code),
+                      h('button', {
+                        type: 'button', className: 'lensGhost',
+                        onClick: function (e) { e.stopPropagation(); askPerm() },
+                      }, '申请'))
+                  : null,
+                info.permissions && info.permissions.missing && info.permissions.missing.length
+                  ? h('div', { className: 'lensDiagRow' },
+                      h('span', { className: 'lensDiagKey' }, '缺的授权'),
+                      h('span', { className: 'lensDiagVal' }, info.permissions.missingLabels.join('、')),
+                      h('button', {
+                        type: 'button', className: 'lensGhost',
+                        onClick: function (e) {
+                          e.stopPropagation()
+                          // 直接跳到对应的隐私面板，省得用户自己找
+                          const pane = info.permissions.panes && info.permissions.panes[0]
+                          if (pane) window.open(pane.url, '_blank')
+                        },
+                      }, '打开设置'))
+                  : null,
                 row('窗口端口', info.hudPort),
                 scan
                   ? row('最近扫描', scan.window + ' · ' + scan.candidates + ' 候选' +

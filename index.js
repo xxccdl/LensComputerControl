@@ -51,6 +51,10 @@ const SETTING_FIELDS = {
     schema: () => z.boolean().default(true),
     text: '坐标点击先预览不落点：返回带绿框的图，模型确认后才真正点击 / Preview coordinate clicks before they land',
   },
+  humanConfirm: {
+    schema: () => z.boolean().default(false),
+    text: '点击必须由人工确认：模型不能自己确认，只有界面上的按钮（或你）能放行 / Require a human to confirm clicks',
+  },
   autoCheck: {
     schema: () => z.boolean().default(false),
     text: '（预览关闭时的兜底）自动检验坐标，被遮挡就拒绝点击 / Auto-verify when preview is off',
@@ -101,6 +105,7 @@ const SETTING_DEFAULTS = {
   hudEnabled: true,
   humanize: true,
   confirmClicks: true,
+  humanConfirm: false,
   autoCheck: false,
   timeoutMs: 25000,
   checkBox: 24,
@@ -134,6 +139,7 @@ function readSettings(config) {
   define('hudEnabled', (v) => v !== false)
   define('humanize', (v) => v !== false)
   define('confirmClicks', (v) => v !== false)
+  define('humanConfirm', (v) => v === true)
   define('autoCheck', (v) => v === true)
   define('timeoutMs', (v) => (Number(v) > 0 ? Number(v) : SETTING_DEFAULTS.timeoutMs))
   define('checkBox', (v) => (Number(v) >= 8 ? Number(v) : SETTING_DEFAULTS.checkBox))
@@ -309,6 +315,30 @@ export function apply(ctx, config) {
   /** 所有引擎调用都从这里走：Windows 直接调用 exe，macOS 用 node 跑 engine-mac.mjs。 */
   const runRaw = (args) => runExe(plan.cmd, plan.pre.concat(args), plan.env)
 
+  // macOS 的控制权限（辅助功能 / 屏幕录制）需要"申请"才会有弹窗：
+  // 光靠用户自己去设置里翻，十有八九会漏。这里在**第一次真正调用引擎之前**
+  // 主动申请一次，系统弹窗会把宿主加进对应列表，用户只要勾选。
+  let permissionState = null
+  let permissionAsked = false
+  const ensurePermissionsOnce = async () => {
+    if (plan.engine === 'exe' || permissionAsked) return
+    permissionAsked = true
+    try {
+      permissionState = await runRaw(['perm', '--action', 'request'])
+      if (permissionState && permissionState.granted === false) {
+        hud.permission = {
+          at: Date.now(),
+          code: 'PERMISSION',
+          message: permissionState.hint || '缺少系统授权',
+        }
+      } else if (permissionState && permissionState.granted === true) {
+        hud.permission = null
+      }
+    } catch {
+      /* 权限申请失败不影响后续（工具调用会再报具体错误） */
+    }
+  }
+
   // 首次调用时把视觉反馈层拉起来（渐变蓝边 + 顶部胶囊）。失败不影响主流程。
   let hudReady = false
   const ensureHudOnce = async () => {
@@ -353,6 +383,7 @@ export function apply(ctx, config) {
 
   /** 每次引擎调用都进时间线，HUD 靠它显示"它刚才干了什么"。 */
   const run = async (args) => {
+    await ensurePermissionsOnce()
     await ensureHudOnce()
     const verb = args[0]
     if (hud.stopped && verb !== 'info' && verb !== 'verify' && verb !== 'focus') {
@@ -416,7 +447,11 @@ export function apply(ctx, config) {
       .slice(0, 5)
 
   /** 真正落点。点的是令牌里记住的坐标，不是调用方这次传进来的 —— 防止「看的是 A、点的是 B」。 */
-  const confirmPending = async (token) => {
+  /**
+   * 确认一次预览。actor='model' 是工具调用方，actor='human' 是 HUD 上的按钮。
+   * 设置里开了「点击必须由人工确认」后，模型这条路径直接拒绝——令牌保留，等人来点。
+   */
+  const confirmPending = async (token, actor) => {
     const pending = pendingClicks.get(token)
     if (!pending) {
       return {
@@ -424,6 +459,15 @@ export function apply(ctx, config) {
         code: 'CONFIRM_INVALID',
         message: '确认令牌无效或已经用过（预览只能确认一次）',
         hint: '重新调一次 computer_act 只给坐标，会重新出图并给新令牌。',
+      }
+    }
+    if (settings.humanConfirm && actor !== 'human') {
+      return {
+        ok: false,
+        code: 'HUMAN_CONFIRM_REQUIRED',
+        message: '设置里开启了「点击必须由人工确认」，模型不能自行确认这次点击。',
+        hint: '请在 HUD 状态卡（右下角）点「确认点击」，或在 设置 → Lens 电脑控制 里关掉这一项。',
+        pending: { x: pending.x, y: pending.y, window: pending.window, at: pending.at },
       }
     }
     pendingClicks.delete(token)
@@ -858,7 +902,7 @@ export function apply(ctx, config) {
       // 不需要预览（那本来就是引擎的答案，不是模型的猜测）。
       const isCoordClick = args?.id === undefined && !args?.cell
 
-      if (args?.confirm) return confirmPending(String(args.confirm))
+      if (args?.confirm) return confirmPending(String(args.confirm), 'model')
 
       if (isCoordClick && settings.confirmClicks && args?.force !== true) {
         const stamp = Date.now().toString(36)
@@ -1498,14 +1542,44 @@ export function apply(ctx, config) {
         enginePath: plan.engine === 'exe' ? plan.cmd : plan.pre[0],
         hudMode: plan.engine === 'exe' ? 'native' : 'web',
         permission: hud.permission || null,
+        permissions: permissionState
+          ? {
+              accessibility: permissionState.accessibility,
+              screen: permissionState.screen,
+              granted: permissionState.granted,
+              missing: permissionState.missing,
+              panes: permissionState.panes,
+              hint: permissionState.hint,
+            }
+          : null,
         settings: {
           confirmClicks: settings.confirmClicks,
+          humanConfirm: settings.humanConfirm,
           autoCheck: settings.autoCheck,
           checkBox: settings.checkBox,
           hudEnabled: settings.hudEnabled,
           humanize: settings.humanize,
         },
       })
+      return
+    }
+    // 权限：GET 读当前状态，POST 重新申请（HUD 卡片与设置页的按钮都打这个口）
+    if (url.pathname === '/permissions') {
+      if (req.method === 'POST') {
+        if (plan.engine === 'exe') {
+          sendJson(res, { ok: true, granted: true, missing: [], hint: 'Windows 侧没有这套授权（用的是 UIA/SendInput）' })
+          return
+        }
+        runRaw(['perm', '--action', 'request'])
+          .then((r) => {
+            permissionState = r
+            hud.permission = r && r.granted === false ? { at: Date.now(), code: 'PERMISSION', message: r.hint } : null
+            sendJson(res, r || { ok: false })
+          })
+          .catch((e) => sendJson(res, { ok: false, code: 'PERM_FAILED', message: String(e && e.message) }))
+        return
+      }
+      sendJson(res, permissionState || { ok: true, granted: plan.engine === 'exe', pending: true })
       return
     }
     if (url.pathname === '/pending') {
@@ -1516,7 +1590,7 @@ export function apply(ctx, config) {
     if (url.pathname === '/confirm') {
       const token = String(url.searchParams.get('token') || '')
       if (!token) { sendJson(res, { ok: false, code: 'BAD_ARGS', message: 'missing token' }); return }
-      confirmPending(token)
+      confirmPending(token, 'human')
         .then((result) => sendJson(res, result))
         .catch((e) => sendJson(res, { ok: false, code: 'CONFIRM_FAILED', message: String(e && e.message) }))
       return

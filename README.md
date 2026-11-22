@@ -123,11 +123,27 @@ macOS 上没有 Win32/UIA，`lens.exe` 跑不了，于是另带一个**零依赖
 | 脚本编排 `computer_run` | ✔ 引擎内解释 | ✔ 引擎内解释（window/focus/click/type/key/paste/scroll/drag/wait/sleep） |
 | HUD 浮层（蓝边+胶囊） | `lenshud.exe` | 无（Web 面板状态卡照常） |
 
-启用步骤：
+权限是**自动申请**的，不用自己找菜单：
 
-1. 装好插件后，首次调用会触发系统授权弹窗；
-2. 到「系统设置 → 隐私与安全性」里给**宿主进程**（DSH Desktop / 终端）勾上 **辅助功能** 与 **屏幕录制**；
+1. 装上插件后，**第一次调用任意 `computer_*` 工具之前**，插件会主动跑一次
+   `engine-mac perm --action request`：
+   - `AXIsProcessTrustedWithOptions({AXTrustedCheckOptionPrompt:true})` → 弹「辅助功能」授权框，
+     并把宿主加进列表（你只要去勾选，不用自己拖）；
+   - `CGRequestScreenCaptureAccess()` → 弹「屏幕录制」授权框。
+2. 到「系统设置 → 隐私与安全性」把宿主进程（DSH Desktop / 终端）的两项勾上；
 3. 重启宿主，`computer_windows` 能列出窗口即接通。
+
+也可以在界面里手动触发：
+
+- HUD 卡片的「申请授权」按钮（权限缺失时才出现）
+- 设置 → Lens 电脑控制 → 引擎诊断 → 「申请」／「打开设置」（后者直接跳到对应的隐私面板）
+
+命令行自查：
+
+```bash
+node engine-mac.mjs perm --action check     # 只看状态，不弹窗
+node engine-mac.mjs perm --action request   # 弹窗申请
+```
 
 ```bash
 # 也可以单独试引擎（不需要插件）

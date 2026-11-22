@@ -160,6 +160,95 @@ async function windowAtPoint(x, y) {
   }
 }
 
+// ---------------------------------------------------------------- 权限
+const PERM_PANES = {
+  accessibility: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
+  screen: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+}
+
+/**
+ * 由两项授权状态算出该做什么。抽成纯函数，方便在非 macOS 上测。
+ * @param {{accessibility:boolean, screen:boolean}} got
+ */
+function permissionSummary(got) {
+  const missing = []
+  if (!got.accessibility) missing.push('accessibility')
+  if (!got.screen) missing.push('screen')
+  const label = { accessibility: '辅助功能', screen: '屏幕录制' }
+  return {
+    granted: missing.length === 0,
+    missing,
+    missingLabels: missing.map((m) => label[m]),
+    // 按缺失项给出能直接跳转的设置面板
+    panes: missing.map((m) => ({ key: m, label: label[m], url: PERM_PANES[m] })),
+    hint: missing.length
+      ? '系统设置 → 隐私与安全性：勾选「' + missing.map((m) => label[m]).join('」「') + '」，然后重启宿主进程'
+      : '两项授权都已具备',
+  }
+}
+
+/** 读当前授权状态（不弹窗）。 */
+async function readPermissions() {
+  const script = `
+    let ax = false, scr = false;
+    try { ObjC.import('ApplicationServices'); ax = $.AXIsProcessTrusted(); } catch (e) {}
+    try { ObjC.import('CoreGraphics'); scr = $.CGPreflightScreenCaptureAccess(); } catch (e) {}
+    out({ accessibility: !!ax, screen: !!scr });
+  `
+  try {
+    const r = JSON.parse((await jxa(script)) || '{}')
+    return { accessibility: !!r.accessibility, screen: !!r.screen }
+  } catch {
+    return { accessibility: false, screen: false }
+  }
+}
+
+/** 申请授权：会真的弹系统弹窗（并把宿主加进对应列表），返回申请后的状态。 */
+async function requestPermissions() {
+  const script = `
+    const asked = [];
+    let ax = false, scr = false;
+    try {
+      ObjC.import('ApplicationServices');
+      ax = $.AXIsProcessTrusted();
+      if (!ax) {
+        // 这个调用会把宿主加进"辅助功能"列表并弹窗，用户只需去勾选
+        const opts = $({ 'AXTrustedCheckOptionPrompt': true });
+        ax = $.AXIsProcessTrustedWithOptions(opts);
+        asked.push('accessibility');
+      }
+    } catch (e) {}
+    try {
+      ObjC.import('CoreGraphics');
+      scr = $.CGPreflightScreenCaptureAccess();
+      if (!scr) {
+        // 第一次调用会触发"屏幕录制"授权弹窗
+        $.CGRequestScreenCaptureAccess();
+        asked.push('screen');
+      }
+    } catch (e) {}
+    out({ accessibility: !!ax, screen: !!scr, asked: asked });
+  `
+  try {
+    const r = JSON.parse((await jxa(script)) || '{}')
+    return { accessibility: !!r.accessibility, screen: !!r.screen, asked: r.asked || [] }
+  } catch (e) {
+    return { accessibility: false, screen: false, asked: [], error: String(e && e.message) }
+  }
+}
+
+/** 打开系统设置里对应的隐私面板。 */
+async function openPermissionPane(which) {
+  const url = PERM_PANES[which]
+  if (!url) return false
+  try {
+    await run('open', [url])
+    return true
+  } catch {
+    return false
+  }
+}
+
 // ---------------------------------------------------------------- OCR
 /**
  * macOS 的 OCR 只有 Vision 一条路，且只能从 Swift 调。三级回退：
@@ -1256,6 +1345,28 @@ async function cmdProbe(argv) {
   }
 }
 
+/** perm：检查 / 申请 macOS 的控制权限（辅助功能 + 屏幕录制）。 */
+async function cmdPerm(argv) {
+  const action = arg(argv, '--action', 'request') // check | request
+  let got = await readPermissions()
+  let asked = []
+  if (action === 'request' && (!got.accessibility || !got.screen)) {
+    const r = await requestPermissions()
+    asked = r.asked || []
+    got = { accessibility: r.accessibility, screen: r.screen }
+  }
+  const summary = permissionSummary(got)
+  emit(Object.assign({
+    ok: true,
+    action,
+    asked,
+    accessibility: got.accessibility,
+    screen: got.screen,
+    notes: ['engine=mac'],
+  }, summary))
+  return 0
+}
+
 async function cmdHud() {
   emit({ ok: false, code: 'HUD_UNAVAILABLE', message: 'macOS 引擎没有 HUD 浮层，请用 Web 面板的状态卡' })
   return 0
@@ -1483,6 +1594,7 @@ const USAGE = `engine-mac.mjs — Lens 的 macOS 引擎（实验性）
   node engine-mac.mjs window --action focus|minimize|restore|move|info --window <名称> [--x --y --w --h]
   node engine-mac.mjs cap [--window <名称>] --out png
   node engine-mac.mjs vision --mode cells [--cells 9] [--rect x,y,w,h | --window 名称] [--path 7.4] --out png
+  node engine-mac.mjs perm [--action check|request]   # 检查/申请 辅助功能 + 屏幕录制
   node engine-mac.mjs hud            # 固定返回 HUD_UNAVAILABLE
 
   node engine-mac.mjs scroll --delta -3 [--x X --y Y] [--horizontal]
@@ -1529,6 +1641,9 @@ async function main() {
       return cmdRead(argv)
     case 'probe':
       return cmdProbe(argv)
+    case 'perm':
+    case 'permissions':
+      return cmdPerm(argv)
     case 'vision':
       return cmdVision(argv)
     case 'run':
@@ -1576,6 +1691,7 @@ export {
   diffImages,
   pngSize,
   parseScriptLine,
+  permissionSummary,
   mergeWordsIntoLines,
   normalizeText,
   similarity,
