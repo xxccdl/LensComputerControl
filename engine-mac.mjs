@@ -22,10 +22,11 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
+import os from 'node:os'
 import { deflateSync, inflateSync } from 'node:zlib'
 
 const run = promisify(execFile)
-const TMP = process.env.TMPDIR || '/tmp'
+const TMP = process.env.TMPDIR || process.env.TEMP || os.tmpdir() // macOS 上 TMPDIR 一定存在；Windows 上退回 os.tmpdir()
 
 // ---------------------------------------------------------------- 参数解析
 function arg(argv, name, def) {
@@ -342,6 +343,32 @@ async function openPermissionPane(which) {
  */
 let ocrHelperPath = null
 let ocrProbed = false
+let ocrLastError = null
+
+/**
+ * 找一个随包的 Swift 小工具：先看已编译的（bin/ 或缓存），没有再让 swiftc 编译一次。
+ * @param name 二进制名（ocr-mac / hud-mac）
+ * @param sourceRel 相对本包的 swift 源（native/mac/xxx.swift）
+ */
+function ensureSwiftTool(name, sourceRel) {
+  const here = thisDir()
+  const cached = join(TMP, 'lens-mac-tools', name)
+  if (existsSync(join(here, 'bin', name))) return { path: join(here, 'bin', name), built: false }
+  if (existsSync(cached)) return { path: cached, built: false }
+  const src = join(here, sourceRel)
+  if (!existsSync(src)) return { path: null, reason: 'source-missing', source: src }
+  const hasSwiftc = spawnSync('swiftc', ['--version'], { encoding: 'utf8' })
+  if (hasSwiftc.status !== 0) {
+    return { path: null, reason: 'swiftc-missing', error: String(hasSwiftc.stderr || '').slice(0, 300) }
+  }
+  const outDir = join(TMP, 'lens-mac-tools')
+  mkdirSync(outDir, { recursive: true })
+  const build = spawnSync('swiftc', ['-O', src, '-o', cached], { encoding: 'utf8' })
+  if (build.status !== 0 || !existsSync(cached)) {
+    return { path: null, reason: 'build-failed', error: String(build.stderr || build.stdout || '').slice(0, 1200) }
+  }
+  return { path: cached, built: true }
+}
 
 function ocrDirectories() {
   const here = thisDir() // 注意：不能用 URL.pathname，安装路径里有空格时是 %20（P0-5）
@@ -354,26 +381,19 @@ function ocrDirectories() {
 function probeOcrHelper() {
   if (ocrProbed) return ocrHelperPath
   ocrProbed = true
+  // 兼容早期的 lens-mac-ocr 缓存目录
   for (const p of ocrDirectories()) {
     if (existsSync(p)) {
       ocrHelperPath = p
       return p
     }
   }
-  // 尝试编译：只在系统有 swiftc 时做，一次之后就复用缓存
-  const here = thisDir() // 注意：不能用 URL.pathname，安装路径里有空格时是 %20（P0-5）
-  const swiftSrc = join(here, 'native', 'mac', 'ocr-mac.swift')
-  const hasSwiftc = spawnSync('swiftc', ['--version'], { encoding: 'utf8' })
-  if (hasSwiftc.status === 0 && existsSync(swiftSrc)) {
-    const outDir = join(TMP, 'lens-mac-ocr')
-    mkdirSync(outDir, { recursive: true })
-    const outBin = join(outDir, 'ocr-mac')
-    const build = spawnSync('swiftc', ['-O', swiftSrc, '-o', outBin], { encoding: 'utf8' })
-    if (build.status === 0 && existsSync(outBin)) {
-      ocrHelperPath = outBin
-      return outBin
-    }
+  const tool = ensureSwiftTool('ocr-mac', join('native', 'mac', 'ocr-mac.swift'))
+  if (tool.path) {
+    ocrHelperPath = tool.path
+    return tool.path
   }
+  ocrLastError = tool
   return null
 }
 
@@ -1581,9 +1601,90 @@ async function cmdPerm(argv) {
   return 0
 }
 
-async function cmdHud() {
-  emit({ ok: false, code: 'HUD_UNAVAILABLE', message: 'macOS 引擎没有 HUD 浮层，请用 Web 面板的状态卡' })
-  return 0
+/**
+ * [hud] macOS 浮层：屏幕边缘渐变描边 + 顶部胶囊。
+ * 状态走一个 JSON 文件（引擎写、Swift 进程每 120ms 读），比 socket 少一整层失败面。
+ */
+const HUD_STATE = join(TMP, 'lens-hud-mac.json')
+
+function writeHudState(patch) {
+  // seq 用时间戳：每次 pulse 都是新进程，用自增计数器会永远从 1 开始，浮层就只闪一次
+  const seq = Date.now()
+  const state = Object.assign({ seq, at: seq, hide: false, quit: false }, patch)
+  try {
+    mkdirSync(dirname(HUD_STATE), { recursive: true })
+    writeFileSync(HUD_STATE, JSON.stringify(state))
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function hudRunning() {
+  try {
+    const raw = await run('pgrep', ['-f', 'hud-mac'])
+    return String(raw.stdout || '').trim().length > 0
+  } catch {
+    return false
+  }
+}
+
+async function cmdHud(argv) {
+  const action = String(arg(argv, '--action', 'status'))
+  const text = arg(argv, '--text', '')
+  const kind = arg(argv, '--kind', '')
+
+  if (action === 'pulse') {
+    writeHudState({ text: text ? String(text) : undefined, kind: kind || undefined })
+    emit({ ok: true, action, state: HUD_STATE, notes: ['engine=mac'] })
+    return 0
+  }
+
+  if (action === 'stop' || action === 'hide') {
+    writeHudState({ hide: true, quit: action === 'stop' })
+    emit({ ok: true, action, state: HUD_STATE, notes: ['engine=mac'] })
+    return 0
+  }
+
+  if (action === 'status') {
+    const info = ensureSwiftTool('hud-mac', join('native', 'mac', 'hud-mac.swift'))
+    emit({
+      ok: true,
+      action,
+      running: await hudRunning(),
+      binary: info.path,
+      buildError: info.path ? undefined : info,
+      state: HUD_STATE,
+      notes: ['engine=mac'],
+    })
+    return 0
+  }
+
+  // start
+  if (await hudRunning()) {
+    writeHudState({ text: 'Lens 已接管桌面', kind: 'ready' })
+    emit({ ok: true, action: 'start', already: true, notes: ['engine=mac'] })
+    return 0
+  }
+  const info = ensureSwiftTool('hud-mac', join('native', 'mac', 'hud-mac.swift'))
+  if (!info.path) {
+    emit({
+      ok: false,
+      code: 'HUD_UNAVAILABLE',
+      message: 'macOS 浮层没能准备出来：' + (info.reason || 'unknown'),
+      detail: info.error || info.source,
+      hint: '需要装 Xcode 命令行工具（提供 swiftc）；也可以手动 swiftc -O native/mac/hud-mac.swift -o bin/hud-mac',
+    })
+    return 6
+  }
+  writeHudState({ text: 'Lens 已接管桌面', kind: 'ready' })
+  // detached：引擎进程退出后浮层要继续活着
+  const child = spawn(info.path, ['--state', HUD_STATE], { detached: true, stdio: 'ignore' })
+  child.unref()
+  await new Promise((r) => setTimeout(r, 400))
+  const running = await hudRunning()
+  emit({ ok: running, action: 'start', binary: info.path, built: info.built, running, notes: ['engine=mac'] })
+  return running ? 0 : 7
 }
 
 // ---------------------------------------------------------------- vision：切块递归定位
@@ -1893,7 +1994,7 @@ const USAGE = `engine-mac.mjs — Lens 的 macOS 引擎（实验性）
   node engine-mac.mjs cap [--window <名称>] --out png
   node engine-mac.mjs vision --mode cells [--cells 9] [--rect x,y,w,h | --window 名称] [--path 7.4] --out png
   node engine-mac.mjs perm [--action check|request]   # 检查/申请 辅助功能 + 屏幕录制
-  node engine-mac.mjs hud            # 固定返回 HUD_UNAVAILABLE
+  node engine-mac.mjs hud --action start|pulse|stop|status [--text "..."] [--kind scan]
 
   node engine-mac.mjs scroll --delta -3 [--x X --y Y] [--horizontal]
   node engine-mac.mjs drag --from x,y --to x,y [--duration 600]

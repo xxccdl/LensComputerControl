@@ -2,6 +2,17 @@
 
 版本号规则：`0.x` 阶段按「新增平台 / 破坏性改动 = 次版本」，其余补丁位。
 
+## 0.10.2
+
+- **macOS 浮层**：新增 `native/mac/hud-mac.swift`（AppKit）——屏幕四边渐变描边 + 顶部动作胶囊，
+  每次 AI 动作闪一下、2.8s 淡出；点击穿透、全空间、不抢焦点。
+  首次调用时与 OCR 小工具共用同一套 `swiftc` 编译缓存；编不出来则 `hud --action status` 回
+  `buildError.reason`，界面自动退回 Web 状态卡。
+- 引擎 `<->` 浮层走状态文件 `$TMPDIR/lens-hud-mac.json`（`{seq,text,kind,hide,quit}`），
+  `seq` 用时间戳而不是自增计数器（每次 pulse 都是新进程，自增会永远从 1 开始，浮层只闪一次）。
+- `index.js` 的 `record()` 现在会顺带 `hud --action pulse`，失败动作标 ✗；
+  `/status` 的 `hudMode` 按实际状态报（浮层起来就是 `native`）。
+- `TMP` 解析改为 `TMPDIR || TEMP || os.tmpdir()`（原来 Windows 上落到 `\tmp`）。
 ## 0.10.1
 
 修 macOS 实测报告里的 P0（明细见 `docs/macos-实测修复.md`）：点击、按键、粘贴、滚动、拖动全链路，

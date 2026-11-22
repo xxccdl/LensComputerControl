@@ -121,7 +121,7 @@ macOS 上没有 Win32/UIA，`lens.exe` 跑不了，于是另带一个**零依赖
 | 像素差分核验 `verify` | ✔ | ✔ 与上一张快照比，额外给 `hoverSuspected`（只变一小块时提示"可能是悬停"） |
 | 遮挡检测 | WindowFromPoint | ✔ `CGWindowListCopyWindowInfo` 按层级顺序判最上层窗口 |
 | 脚本编排 `computer_run` | ✔ 引擎内解释 | ✔ 引擎内解释（window/focus/click/type/key/paste/scroll/drag/wait/sleep） |
-| HUD 浮层（蓝边+胶囊） | `lenshud.exe` | 无（Web 面板状态卡照常） |
+| HUD 浮层（蓝边+胶囊） | `lenshud.exe` | `hud-mac.swift`（首次调用自动编译；编不出来就退回 Web 状态卡） |
 
 权限是**自动申请**的，不用自己找菜单：
 
@@ -150,6 +150,26 @@ node engine-mac.mjs perm --action request   # 弹窗申请
 node engine-mac.mjs info --json
 node engine-mac.mjs scan --window Safari --overlay /tmp/scan.png
 node engine-mac.mjs vision --mode cells --cells 9 --out /tmp/cells.png
+```
+
+### macOS 的浮层（屏幕边缘的呼吸光）
+
+和 Windows 一样有：**屏幕四边渐变描边 + 顶部胶囊**，每次 AI 动作闪一下、2.8 秒淡出。
+实现是 `native/mac/hud-mac.swift`（AppKit，约 230 行，点击穿透 + 全空间 + 不抢焦点）：
+
+- 第一次需要时用 `swiftc` 编译成 `$TMPDIR/lens-mac-tools/hud-mac`（与 OCR 小工具共用同一套编译缓存）
+- 引擎与浮层之间走一个状态文件 `$TMPDIR/lens-hud-mac.json`：`{seq, text, kind, hide, quit}`
+  —— 用文件而不是 socket，少一整层失败面
+- 每次动作后 `hud --action pulse --text "scan 微信 · 23 候选"`，浮层读到新 seq 就闪一下
+- 编不出来（没装 Xcode CLT）时：`hud --action status` 会回 `buildError.reason`，
+  界面自动退回 Web 状态卡，其它功能不受影响
+
+手动试：
+
+```bash
+node engine-mac.mjs hud --action start      # 起浮层
+node engine-mac.mjs hud --action pulse --text "click 412,268"
+node engine-mac.mjs hud --action stop
 ```
 
 已知限制：AX 树在 Electron / Qt / 游戏里通常为空，这类窗口只能靠 `computer_vision` 切块 + `computer_check` 预览。OCR 走三级回退：① 已编译的 `bin/ocr-mac`（或缓存）→ ② 若系统有 `swiftc`，首次调用时自动编译随包的 `native/mac/ocr-mac.swift`（Vision 框架，约 120 行）→ ③ 借名为 `LensOCR` 的快捷指令（`shortcuts run`）。三者都没有时 `computer_look mode:"text"` 返回 `OCR_UNAVAILABLE`，`scan` 会降级成只有 AX 候选。

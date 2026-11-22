@@ -303,6 +303,7 @@ export function apply(ctx, config) {
   const record = (kind, detail, ok) => {
     hud.timeline.unshift({ at: Date.now(), kind, detail, ok })
     if (hud.timeline.length > 40) hud.timeline.length = 40
+    pulseHud(kind, detail, ok)
   }
 
   /** 坐标点击的「预览 → 确认」：令牌 -> 那一次点击的参数。一次性、短时效。 */
@@ -388,18 +389,33 @@ export function apply(ctx, config) {
 
   // 首次调用时把视觉反馈层拉起来（渐变蓝边 + 顶部胶囊）。失败不影响主流程。
   let hudReady = false
+  let hudNative = plan.engine === 'exe'
   const ensureHudOnce = async () => {
     if (hudReady) return
     hudReady = true
-    // macOS 没有 lenshud 浮层（那是 Windows 实现），Web 面板里的状态卡照常可用
-    if (plan.engine !== 'exe') return
     // 设置里关掉 HUD 就彻底不启动那个窗口：省一次进程，也让"完全静默"成为可选
     if (!settings.hudEnabled) return
     try {
-      await runRaw(['hud', '--action', 'start'])
+      const r = await runRaw(['hud', '--action', 'start'])
+      // macOS 的浮层是运行时用 swiftc 编出来的，编不出来就退回"只有 Web 状态卡"
+      if (plan.engine !== 'exe') {
+        hudNative = !!(r && r.ok === true && r.running !== false)
+        if (!hudNative) {
+          record('hud', '浮层不可用：' + (r && (r.message || r.code)) || 'swiftc 缺失', false)
+        }
+      }
     } catch {
       /* HUD 只是锦上添花 */
     }
+  }
+
+  /** 每次动作后在屏幕边缘闪一下（macOS 的浮层靠这个文件驱动）。 */
+  const pulseHud = (kind, detail, ok) => {
+    if (!hudNative) return
+    const text = String(detail || kind || '').slice(0, 60)
+    runRaw(['hud', '--action', 'pulse', '--text', (ok ? '' : '✗ ') + text, '--kind', String(kind || '')]).catch(
+      () => {},
+    )
   }
 
   /** 设置里禁用人类化节奏后，给动作类命令补 --instant（点击/输入/按键/拖动）。 */
@@ -1595,7 +1611,7 @@ export function apply(ctx, config) {
         engine: plan.engine,
         engineLabel: plan.engine === 'exe' ? 'Windows 引擎 (lens.exe)' : 'macOS 引擎 (Node)',
         enginePath: plan.engine === 'exe' ? plan.cmd : plan.pre[0],
-        hudMode: plan.engine === 'exe' ? 'native' : 'web',
+        hudMode: hudNative ? 'native' : 'web',
         permission: hud.permission || null,
         permissions: permissionState
           ? {
