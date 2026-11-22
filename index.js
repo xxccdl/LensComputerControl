@@ -465,6 +465,11 @@ export function apply(ctx, config) {
       type: 'object',
       properties: {
         filter: { type: 'string', description: '可选，只返回标题或进程名包含该子串的窗口' },
+        probe: {
+          type: 'string',
+          description:
+            '试抓一帧并给每条窗口补 capturable / captureMethod / blackRatio。传关键词只探测匹配的窗口（推荐，每次探测都真抓一帧），传 "*" 探测全部。用来回答"是看不见，还是根本抓不到"。',
+        },
       },
       additionalProperties: false,
     },
@@ -489,7 +494,10 @@ export function apply(ctx, config) {
       },
     },
     async execute(args) {
-      const list = (await run(['info', '--json'])) || []
+      const probeKey = args?.probe === undefined ? null : String(args.probe)
+      const infoArgs = ['info', '--json']
+      if (probeKey !== null) infoArgs.push('--probe', probeKey === 'true' || probeKey === 'all' ? '*' : probeKey)
+      const list = (await run(infoArgs)) || []
       if (!Array.isArray(list)) {
         return { ok: false, error: 'info 命令未返回窗口数组', detail: list }
       }
@@ -817,6 +825,28 @@ export function apply(ctx, config) {
             coveredBy: chk.coveredBy,
             hint: '看图修正坐标，或先 focus 目标窗口；也可以在 设置 → 插件 → Lens 关掉「自动坐标检验」。\n如果这个窗口本来就不该在前台（托盘、后台应用），改用 { background: true } 走窗口消息点击。',
           }
+          }
+        }
+        // 遮挡类失败再问一句"这窗口到底能不能抓"：能抓就说明只是不在最前面，
+        // background 点击大概率可行；抓不到才是真不可操作。别让调用方靠 try/error 猜。
+        if (chk && chk.ok === true && chk.covered) {
+          const probe = await runRaw(['probe', '--window', w])
+          if (probe && probe.ok === true) {
+            return Object.assign({}, {
+              ok: false,
+              code: 'TARGET_COVERED',
+              message: '目标点被其他窗口遮挡，已按设置拒绝点击',
+              image: chk.image,
+              point: chk.point,
+              coveredBy: chk.coveredBy,
+              capturable: probe.capturable === true,
+              captureMethod: probe.captureMethod,
+              blackRatio: probe.blackRatio,
+              hint:
+                probe.capturable === true
+                  ? '这个窗口抓得到（' + (probe.captureMethod || '?') + '），说明只是不在最前面：改用 { background: true } 走窗口消息点击，或先 computer_window { action: "focus" }。'
+                  : '这个窗口抓不到画面（黑屏比例 ' + probe.blackRatio + '），多半开了反截屏保护：只能做引导，无法代点。',
+            })
           }
         }
       }

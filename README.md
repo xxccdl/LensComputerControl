@@ -78,6 +78,26 @@ docs/              截图与详细用法（docs/USAGE.md）
 
 完整用法（工具表、六通道细节、流程脚本、HUD、命令行）见 [docs/USAGE.md](docs/USAGE.md)。
 
+## 测试
+
+```bash
+npm test                 # 跑全部（tools/test-all.mjs 逐个独立进程跑 tests/test-*.mjs）
+npm test -- --filter mac # 只跑匹配的
+```
+
+断言输出约定：以 `PASS` / `FAIL` / `SKIP` 开头的行。覆盖的内容：
+
+| 文件 | 覆盖 |
+|---|---|
+| `test-hud-render` / `test-hud-card` / `test-hud-endpoints` | HUD 渲染树、待确认卡片、四个本地接口、令牌一次性 |
+| `test-client-settings` / `test-client-diag` | 设置面板与「引擎诊断」块 |
+| `test-config-volatile` / `test-host-resolve` | 宿主兜底下 Config 可解析、字段全是 volatile |
+| `test-click-preview` / `test-run-guard` / `test-settings` | 预览-确认链路、脚本裸坐标拦截、黑名单 |
+| `test-window-move` / `test-probe` | move 几何校准（真移动窗口再还原）、可捕获性探测 |
+| `test-mac-png` / `-cells` / `-crop-diff` / `-ocr` / `-script` | macOS 引擎的纯逻辑：PNG 编解码、切块、裁剪、差分、OCR 词→行、脚本词法 |
+| `test-engine-plan` | 平台 → 引擎选择 |
+| `test-bom` | 引擎输出的 UTF-8 BOM 不会打挂解析 |
+
 ## 自己构建
 
 ```powershell

@@ -29,6 +29,9 @@
     "url": "https://github.com/xxccdl/LensComputerControl/issues"
   },
   "type": "module",
+  "scripts": {
+    "test": "node tools/test-all.mjs"
+  },
   "os": [
     "win32",
     "darwin"

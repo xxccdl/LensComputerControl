@@ -1216,6 +1216,46 @@ async function captureEmit(fn, args) {
   }
 }
 
+/** probe：这个窗口能不能抓到（macOS 上没有反截屏保护，通常都能，但要给出证据）。 */
+async function cmdProbe(argv) {
+  const key = arg(argv, '--window', null)
+  const list = key ? await listWindows() : []
+  const win = key ? pickWindow(list, key) : null
+  if (key && !win) {
+    emit({ ok: false, code: 'WINDOW_NOT_FOUND', message: `window not found: ${key}` })
+    return 3
+  }
+  const frame = win ? { x: Math.round(win.x), y: Math.round(win.y), w: Math.round(win.w), h: Math.round(win.h) } : null
+  try {
+    const img = decodePng(await captureRect(frame))
+    // 采样算黑屏比例（与 Windows 侧同口径）
+    const stepX = Math.max(1, Math.floor(img.width / 40))
+    const stepY = Math.max(1, Math.floor(img.height / 40))
+    let total = 0
+    let black = 0
+    for (let y = 0; y < img.height; y += stepY) {
+      for (let x = 0; x < img.width; x += stepX) {
+        total++
+        const [r, g, b] = pixelAt(img, x, y)
+        if (r < 12 && g < 12 && b < 12) black++
+      }
+    }
+    const ratio = total ? black / total : 1
+    emit({
+      ok: true,
+      window: win ? { title: win.title, process: win.process, pid: win.pid,dpi: 144, frame } : null,
+      capturable: ratio < 0.98,
+      captureMethod: win ? 'screencapture-window' : 'screencapture-desktop',
+      blackRatio: Number(ratio.toFixed(2)),
+      notes: ['engine=mac'],
+    })
+    return 0
+  } catch (e) {
+    emit({ ok: true, capturable: false, captureReason: String(e && e.message || 'capture failed'), notes: ['engine=mac'] })
+    return 0
+  }
+}
+
 async function cmdHud() {
   emit({ ok: false, code: 'HUD_UNAVAILABLE', message: 'macOS 引擎没有 HUD 浮层，请用 Web 面板的状态卡' })
   return 0
@@ -1487,6 +1527,8 @@ async function main() {
       return cmdCap(argv)
     case 'read':
       return cmdRead(argv)
+    case 'probe':
+      return cmdProbe(argv)
     case 'vision':
       return cmdVision(argv)
     case 'run':

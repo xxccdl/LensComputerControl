@@ -56,11 +56,14 @@
 
 另有一例 `1885x902 @8,90` 突然变成 `960x1020 @0,0`，未能复现，怀疑是系统贴靠（Snap Assist）介入；校准循环对这种情况会在 `corrections` 里露出多个回合，可作为线索。
 
-### 5. 可见性判定与真实可操作性脱钩 —— **部分已修**
+### 5. 可见性判定与真实可操作性脱钩 —— **已修（可捕获性探测）**
 
 - 复现：窗口不在 `computer_windows` 列表里；`computer_act` 报 `TARGET_COVERED`（先说被 919148 挡，focus 后又说被 199778 挡）；但同一时刻 `PrintWindow` 能截出完整画面、`background` 点击也能点。
 - 已修：`computer_act` 的遮挡检查不再一律硬拒 —— 当 `background:true` 或 `force:true` 且点落在窗口内时，遮挡降级为 warning 继续执行；报错文案里也明确提示"该窗口不该在前台时改用 background"。
-- 未修：`computer_windows` 的 `visible` 与"能不能截到/点到"仍是两个独立事实，没有统一成 `capturable` 字段。
+- 已修：`computer_windows { probe: "微信" }` 会真抓一帧并回 `capturable` / `captureMethod` / `blackRatio`；
+  `computer_act` 因遮挡被拒时也会自动 probe 一次，hint 里分两种情况：
+  「抓得到 → 只是不在最前面，用 `background:true`」/「抓不到 → 反截屏保护，只能引导」。
+- 仍未做：把 `capturable` 缓存进窗口列表（现在每次 probe 都是真抓一帧，所以只在需要时才调）。
 
 ### 6. 我自己踩的坑（设计如此，但要记住）
 
@@ -81,6 +84,6 @@
 | # | 问题 | 影响 | 建议方向 |
 |---|---|---|---|
 | 1 | `expectedFingerprint` 对未扫描窗口无效 | 视觉坐标过期无检测 | 让 `vision` 自己算一次轻量指纹（窗口矩形 + 标题 + 时间戳）并回传 |
-| 2 | 无 `capturable` 字段 | "不可见"与"可操作"仍要试错 | `info` 里加 `canCapture`/`canBackgroundClick` 探测结果 |
+| 2 | ~~无 `capturable` 字段~~ | **已修**：`computer_windows { probe: "关键词" }` 与 `computer_act` 的遮挡错误都会回 `capturable` / `captureMethod` / `blackRatio` | — |
 | 3 | `verify` 无区域语义 | 悬停误判 | 差分时排除光标周围 ±20px，或只比较落点外的区域 |
 | 4 | 窗口被系统贴靠改写几何 | 偶发尺寸突变 | 校准失败时回传 `snapSuspected: true` |

@@ -571,6 +571,7 @@ namespace Lens
                 if (cn != null) Win32.ClassFilter = cn;
                 string cmd = rawArgs[0];
                 if (cmd == "info") return CmdInfo(rawArgs);
+            if (cmd == "probe") return CmdProbe(rawArgs);
                 if (cmd == "scan") return CmdScan(rawArgs);
                 if (cmd == "click") return CmdClick(rawArgs);
                 if (cmd == "move")
@@ -692,11 +693,24 @@ namespace Lens
             bool json = Flag(a, "--json");
             if (json)
             {
+                // --probe：逐窗口试抓一帧，回答"看得见但抓不到 / 抓得到但看不见"这类问题。
+                // 只对过滤后数量不多的场景用（每次 PrintWindow 都是真抓一帧），所以默认关闭。
+                string probeKey = Arg(a, "--probe", null);
                 var sb = new StringBuilder("[");
                 for (int i = 0; i < list.Count; i++)
                 {
                     if (i > 0) sb.Append(",");
-                    sb.Append(list[i].ToJson());
+                    string one = list[i].ToJson();
+                    bool wantProbe = probeKey != null
+                        && (probeKey == "*" || probeKey.Length == 0
+                            || (list[i].Title ?? "").IndexOf(probeKey, StringComparison.OrdinalIgnoreCase) >= 0
+                            || (list[i].Process ?? "").IndexOf(probeKey, StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (wantProbe)
+                    {
+                        string extra = ProbeCapture(list[i]);
+                        one = one.Substring(0, one.Length - 1) + (extra.Length > 0 ? "," + extra : "") + "}";
+                    }
+                    sb.Append(one);
                 }
                 sb.Append("]");
                 Console.Write(sb.ToString());
@@ -707,6 +721,57 @@ namespace Lens
                 Console.WriteLine("{0,-10} {1,-6} {2,-9} {3,-22} {4}", w.Hwnd, w.Dpi,
                     w.Minimized ? "minimized" : (w.Max ? "maximized" : "normal"),
                     Trunc(w.Class, 22), Trunc(w.Title, 60));
+            return 0;
+        }
+
+        /// <summary>
+        /// 试抓一帧，回答"这个窗口到底能不能被抓到"。
+        /// 返回可直接拼进窗口 JSON 的字段串；抓不到也要给出原因，别静默。
+        /// </summary>
+        static string ProbeCapture(WindowInfo w)
+        {
+            try
+            {
+                var cap = new Capability();
+                string method;
+                using (var img = Capture.Acquire(w, cap, out method, Win32.ListOwnedPopups(new IntPtr(w.Hwnd))))
+                {
+                    if (img == null)
+                        return "\"capturable\":false,\"captureReason\":\"blocked\"";
+                    // 采样估算黑屏比例：反截屏保护的窗口抓出来是全黑
+                    int stepX = Math.Max(1, img.Width / 40);
+                    int stepY = Math.Max(1, img.Height / 40);
+                    int total = 0, black = 0;
+                    for (int y = 0; y < img.Height; y += stepY)
+                        for (int x = 0; x < img.Width; x += stepX)
+                        {
+                            total++;
+                            var c = img.GetPixel(x, y);
+                            if (c.R < 12 && c.G < 12 && c.B < 12) black++;
+                        }
+                    double ratio = total > 0 ? (double)black / total : 1.0;
+                    bool ok = ratio < 0.98;
+                    return "\"capturable\":" + (ok ? "true" : "false")
+                        + ",\"captureMethod\":" + Json.Str(method)
+                        + ",\"blackRatio\":" + ratio.ToString("0.00")
+                        + (ok ? "" : ",\"captureReason\":\"all-black\"");
+                }
+            }
+            catch (Exception e)
+            {
+                return "\"capturable\":false,\"captureReason\":" + Json.Str(e.GetType().Name);
+            }
+        }
+
+        /// <summary>probe：只回答一个窗口能不能抓、能不能后台点，不改任何状态。</summary>
+        static int CmdProbe(string[] a)
+        {
+            string key = Arg(a, "--window", null);
+            if (key == null) { Console.Write("{\"ok\":false,\"code\":\"BAD_ARGS\",\"message\":\"missing --window\"}"); return 2; }
+            var w = Win32.FindWindow(key);
+            if (w == null) { Console.Write(WindowErrorJson(key)); return 3; }
+            string extra = ProbeCapture(w);
+            Console.Write("{\"ok\":true,\"window\":" + w.ToJson() + (extra.Length > 0 ? "," + extra : "") + "}");
             return 0;
         }
 
