@@ -131,6 +131,35 @@ async function axCandidates(pid) {
   }
 }
 
+/**
+ * 屏幕上该点最上层的窗口是谁：CGWindowList 的顺序就是层级顺序（索引 0 最前）。
+ * 用来判断"这个点此刻会不会点到别的窗口"，比问 System Events 准。
+ */
+async function windowAtPoint(x, y) {
+  const script = `
+    ObjC.import('CoreGraphics');
+    const opts = $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements;
+    const raw = $.CGWindowListCopyWindowInfo(opts, $.kCGNullWindowID);
+    const arr = ObjC.deepUnwrap(raw) || [];
+    for (const w of arr) {
+      const b = w.kCGWindowBounds || {};
+      if (b.Width <= 1 || b.Height <= 1) continue;
+      if (${x} >= b.X && ${x} < b.X + b.Width && ${y} >= b.Y && ${y} < b.Y + b.Height) {
+        out({ pid: w.kCGWindowOwnerPID, name: w.kCGWindowOwnerName || '', layer: w.kCGWindowLayer || 0, bounds: b });
+      }
+    }
+    out(null);
+  `
+  try {
+    const raw = await jxa(script)
+    // 可能有多行输出（循环里多次 out），取第一个对象
+    const first = String(raw).split('\n').find((l) => l.trim().startsWith('{'))
+    return first ? JSON.parse(first) : null
+  } catch {
+    return null
+  }
+}
+
 // ---------------------------------------------------------------- 截图
 async function screenRect() {
   try {
@@ -425,6 +454,14 @@ async function cmdCheck(argv) {
   mkdirSync(dirname(out), { recursive: true })
   writeFileSync(out, encodePng(img))
   const [pr, pg, pb] = pixelAt(img, lx, ly)
+
+  // 遮挡探测：问 CGWindowList"这个点最上层是谁"，不是目标进程就是被盖住了
+  const key2 = arg(argv, '--window', null)
+  const target = key2 ? pickWindow(await listWindows(), key2) : null
+  const top = await windowAtPoint(x, y)
+  const covered = !!(top && target && top.pid !== target.pid)
+  const coveredBy = covered ? { pid: top.pid, title: top.name, process: top.name } : null
+
   emit({
     ok: true,
     image: out,
@@ -440,7 +477,8 @@ async function cmdCheck(argv) {
       y2: y - Math.round(bh / 2) + bh,
     },
     inside: true,
-    covered: false,
+    covered,
+    coveredBy: coveredBy || undefined,
     zoom,
     pixel: '#' + [pr, pg, pb].map((v) => v.toString(16).padStart(2, '0').toUpperCase()).join(''),
     hint: 'macOS 引擎：绿框是命中范围，右下角是放大视图；确认后 computer_act {confirm} 落点。',
@@ -452,9 +490,23 @@ async function cmdCheck(argv) {
 async function cmdClick(argv) {
   const x = intArg(argv, '--x', null)
   const y = intArg(argv, '--y', null)
-  if (arg(argv, '--id', null) !== null && (x === null || y === null)) {
-    emit({ ok: false, code: 'ID_UNSUPPORTED', message: 'macOS 引擎暂不支持按候选 id 点击，请用 scan 给的 cx,cy' })
-    return 4
+  // --id：先扫一遍 AX 树，按编号取候选中心点（与 Windows 侧"点候选"语义一致）
+  const wantId = intArg(argv, '--id', null)
+  if (wantId !== null && (x === null || y === null)) {
+    const key = arg(argv, '--window', null)
+    const win = key ? pickWindow(await listWindows(), key) : null
+    if (!win) {
+      emit({ ok: false, code: 'WINDOW_NOT_FOUND', message: `window not found: ${key}` })
+      return 3
+    }
+    const cands = await axCandidates(win.pid)
+    if (wantId < 1 || wantId > cands.length) {
+      emit({ ok: false, code: 'CANDIDATE_NOT_FOUND', message: `candidate #${wantId} out of 1..${cands.length}` })
+      return 3
+    }
+    const c = cands[wantId - 1]
+    x = Math.round(c.x + c.w / 2)
+    y = Math.round(c.y + c.h / 2)
   }
   if (x === null || y === null) {
     emit({ ok: false, code: 'BAD_ARGS', message: 'need --x and --y' })
@@ -567,21 +619,348 @@ async function cmdWindow(argv) {
     const procs = se.applicationProcesses.whose({ name: ${JSON.stringify(win.process)} })();
     if (procs.length) { const p = procs[0]; ${body} out({ ok: true }); } else { out({ ok: false }); }
   `)
-  emit({ ok: true, action, notes: ['engine=mac'] })
+  const after = (await listWindows()).find((w) => w.process === win.process && w.title === win.title) || null
+  emit({
+    ok: true,
+    action,
+    frame: after ? { x: Math.round(after.x), y: Math.round(after.y), w: Math.round(after.w), h: Math.round(after.h) } : null,
+    notes: ['engine=mac'],
+  })
   return 0
 }
 
 async function cmdCap(argv) {
   const out = arg(argv, '--out', join(process.cwd(), 'cap.png'))
   const key = arg(argv, '--window', null)
-  const list = await listWindows()
+  const rectArg = arg(argv, '--rect', null)
+  const list = key ? await listWindows() : []
   const win = key ? pickWindow(list, key) : null
-  const frame = win ? { x: Math.round(win.x), y: Math.round(win.y), w: Math.round(win.w), h: Math.round(win.h) } : null
-  const buf = await captureRect(frame)
+  if (key && !win) {
+    emit({ ok: false, code: 'WINDOW_NOT_FOUND', message: `window not found: ${key}` })
+    return 3
+  }
+  const base = win
+    ? { x: Math.round(win.x), y: Math.round(win.y), w: Math.round(win.w), h: Math.round(win.h) }
+    : null
+  let buf = await captureRect(base)
+  const origin = base || (await screenRect())
+  let saved = origin
+
+  // --rect：按屏幕坐标裁剪（跟 Windows 侧 cap --rect 行为一致）。
+  // 之前 mac 引擎完全忽略 --rect，调用方传了区域仍拿整窗图，换算全错。
+  if (rectArg) {
+    const [rx, ry, rw, rh] = String(rectArg).split(',').map((v) => parseInt(v, 10))
+    if (![rx, ry, rw, rh].every((v) => Number.isFinite(v)) || rw <= 0 || rh <= 0) {
+      emit({ ok: false, code: 'BAD_ARGS', message: '--rect 需要 x,y,w,h' })
+      return 2
+    }
+    const img = decodePng(buf)
+    const cropped = cropRect(img, { x: rx, y: ry, w: rw, h: rh }, origin)
+    if (!cropped) {
+      emit({ ok: false, code: 'RECT_OUTSIDE', message: 'requested rect is outside the captured image', origin })
+      return 2
+    }
+    buf = encodePng(cropped.img)
+    saved = cropped.rect
+  }
   mkdirSync(dirname(out), { recursive: true })
   writeFileSync(out, buf)
-  emit({ ok: true, file: out, notes: ['engine=mac'] })
+  const size = pngSize(buf)
+  emit({
+    ok: true,
+    file: out,
+    w: size.w,
+    h: size.h,
+    x: saved.x,
+    y: saved.y,
+    method: win ? 'screencapture-window' : 'screencapture-desktop',
+    notes: ['engine=mac'],
+  })
   return 0
+}
+
+/** 从 PNG 头里读尺寸，省一次解码。 */
+function pngSize(buf) {
+  return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }
+}
+
+/** 按屏幕矩形裁剪；origin 是这张图左上角对应的屏幕坐标。返回 { img, rect } 或 null。 */
+function cropRect(img, rect, origin) {
+  const x = rect.x - origin.x
+  const y = rect.y - origin.y
+  const w = Math.min(rect.w, img.width - x)
+  const h = Math.min(rect.h, img.height - y)
+  if (x < 0 || y < 0 || w <= 0 || h <= 0) return null
+  const channels = img.channels
+  const data = Buffer.alloc(w * h * channels)
+  for (let row = 0; row < h; row++) {
+    img.data.copy(data, row * w * channels, ((y + row) * img.width + x) * channels, ((y + row) * img.width + x + w) * channels)
+  }
+  return { img: { width: w, height: h, channels, data }, rect: { x: rect.x, y: rect.y, w, h } }
+}
+
+/** 两张同尺寸图的像素差分：返回变化像素比例，以及"只变了一小块（疑似悬停）"的判定。 */
+function diffImages(a, b) {
+  if (a.width !== b.width || a.height !== b.height) {
+    return { changed: true, ratio: 1, rescued: false, reason: 'size-changed' }
+  }
+  const channels = a.channels
+  let changed = 0
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -1
+  let maxY = -1
+  const step = 2 // 隔像素采样，够用且快
+  let sampled = 0
+  for (let y = 0; y < a.height; y += step) {
+    for (let x = 0; x < a.width; x += step) {
+      sampled++
+      const i = (y * a.width + x) * channels
+      const d =
+        Math.abs(a.data[i] - b.data[i]) +
+        Math.abs(a.data[i + 1] - b.data[i + 1]) +
+        Math.abs(a.data[i + 2] - b.data[i + 2])
+      if (d > 24) {
+        changed++
+        if (x < minX) minX = x
+        if (y < minY) minY = y
+        if (x > maxX) maxX = x
+        if (y > maxY) maxY = y
+      }
+    }
+  }
+  const ratio = sampled ? changed / sampled : 0
+  const box = maxX >= 0 ? { x: minX, y: minY, w: maxX - minX, h: maxY - minY } : null
+  // 变化局限在很小一块（典型：鼠标悬停高亮、光标闪烁）→ 不能当"动作成功"
+  const tiny = box ? box.w * box.h <= 160 * 160 : false
+  return {
+    changed: ratio > 0.0008,
+    ratio: Number(ratio.toFixed(5)),
+    box,
+    hoverSuspected: !!box && tiny,
+  }
+}
+
+/** 滚动：用 CGEvent 生成滚轮事件（JXA 走 ObjC 桥）。 */
+async function cmdScroll(argv) {
+  const delta = intArg(argv, '--delta', -3)
+  const x = intArg(argv, '--x', null)
+  const y = intArg(argv, '--y', null)
+  const horizontal = flag(argv, '--horizontal')
+  const pixels = delta * 40 // 一格约 40px，与 Windows 侧手感对齐
+  await jxa(`
+    ObjC.import('CoreGraphics');
+    const wheel = ${horizontal ? 2 : 1};
+    const ev = $.CGEventCreateScrollWheelEvent(null, 1, wheel, ${pixels});
+    ${x !== null && y !== null ? `$.CGEventPostToPid(0, ev);` : ''}
+    out({ ok: true });
+  `)
+  emit({ ok: true, delta, horizontal, notes: ['engine=mac', 'CGEventCreateScrollWheelEvent'] })
+  return 0
+}
+
+/** 拖拽：按下 → 分步移动 → 抬起（分步是为了让目标应用收到 drag 而不是"瞬移"）。 */
+async function cmdDrag(argv) {
+  const from = String(arg(argv, '--from', '')).split(',').map((v) => parseInt(v.replace(/^w/, ''), 10))
+  const to = String(arg(argv, '--to', '')).split(',').map((v) => parseInt(v.replace(/^w/, ''), 10))
+  if (from.length !== 2 || to.length !== 2 || from.concat(to).some((v) => !Number.isFinite(v))) {
+    emit({ ok: false, code: 'BAD_ARGS', message: '需要 --from x,y --to x,y' })
+    return 2
+  }
+  const steps = Math.max(4, Math.min(24, intArg(argv, '--duration', 600) / 40))
+  await jxa(`
+    ObjC.import('CoreGraphics');
+    const src = ${JSON.stringify(from)};
+    const dst = ${JSON.stringify(to)};
+    const steps = ${Math.round(steps)};
+    const down = $.CGEventCreateMouseEvent(null, 1, { x: src[0], y: src[1] }, 0);
+    $.CGEventPost(0, down);
+    for (let i = 1; i <= steps; i++) {
+      const px = src[0] + (dst[0] - src[0]) * i / steps;
+      const py = src[1] + (dst[1] - src[1]) * i / steps;
+      const mv = $.CGEventCreateMouseEvent(null, 6, { x: px, y: py }, 0);
+      $.CGEventPost(0, mv);
+    }
+    const up = $.CGEventCreateMouseEvent(null, 2, { x: dst[0], y: dst[1] }, 0);
+    $.CGEventPost(0, up);
+    out({ ok: true });
+  `)
+  emit({ ok: true, from, to, duration: intArg(argv, '--duration', 600), notes: ['engine=mac'] })
+  return 0
+}
+
+/** 像素差分核验：跟上一张快照比。快照存在 tmp 里，key 用窗口标题（或 desktop）。 */
+async function cmdVerify(argv) {
+  const key = arg(argv, '--window', null) || 'desktop'
+  const snapDir = join(TMP, 'lens-mac-snap')
+  const snapPath = join(snapDir, String(key).replace(/[^\w\u4e00-\u9fa5-]+/g, '_') + '.png')
+  let saved = null
+  try {
+    saved = decodePng(await readFile(snapPath))
+  } catch {
+    saved = null
+  }
+  const list = key === 'desktop' ? [] : await listWindows()
+  const win = key === 'desktop' ? null : pickWindow(list, key)
+  const frame = win ? { x: Math.round(win.x), y: Math.round(win.y), w: Math.round(win.w), h: Math.round(win.h) } : null
+  const buf = await captureRect(frame)
+  mkdirSync(snapDir, { recursive: true })
+  writeFileSync(snapPath, buf)
+  const now = decodePng(buf)
+  if (!saved) {
+    emit({ ok: true, changed: false, baseline: true, notes: ['engine=mac', 'first snapshot stored'] })
+    return 0
+  }
+  const d = diffImages(saved, now)
+  emit(Object.assign({ ok: true, notes: ['engine=mac'] }, d))
+  return 0
+}
+
+/**
+ * 脚本编排：每行「动词 键=值 …」，与 Windows 侧 run 命令同名同义。
+ * 支持 window / focus / click / type / key / paste / scroll / drag / wait / sleep。
+ * 默认遇错即停并返回逐步 trace；--continue 则失败也继续。
+ */
+/** 把一行脚本切成 { verb, kv, bare }。支持 key=value 与带引号的值。 */
+function parseScriptLine(line) {
+  const tokens = []
+  const re = /(\w+)=("[^"]*"|'[^']*'|\S+)|"[^"]*"|'[^']*'|\S+/g
+  let m
+  while ((m = re.exec(String(line)))) tokens.push(m[0])
+  const verb = (tokens.shift() || '').toLowerCase()
+  const kv = {}
+  const bare = []
+  for (const t of tokens) {
+    const eq = t.indexOf('=')
+    if (eq > 0) {
+      const k = t.slice(0, eq).toLowerCase()
+      let v = t.slice(eq + 1)
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
+      kv[k] = v
+    } else bare.push(t.replace(/^["']|["']$/g, ''))
+  }
+  return { verb, kv, bare }
+}
+
+async function cmdRun(argv) {
+  const text = arg(argv, '--text', '')
+  const keepGoing = flag(argv, '--continue')
+  const trace = []
+  let current = null // 脚本里 window 设定的默认目标
+
+  const parseLine = parseScriptLine
+
+  // 每个动词 → 调哪个内部命令 + 参数怎么拼
+  const callFor = (verb, kv, bare) => {
+    const win = kv.window || current
+    if (verb === 'window') {
+      current = bare.join(' ')
+      return null
+    }
+    if (verb === 'focus') return { fn: cmdFocus, args: ['--window', win || ''] }
+    if (verb === 'sleep') return { sleep: Number(kv.ms || bare[0] || 300) }
+    if (verb === 'click') {
+      const a = ['--window', win || '']
+      if (kv.id) a.push('--id', kv.id)
+      if (kv.x) a.push('--x', kv.x)
+      if (kv.y) a.push('--y', kv.y)
+      if (kv.count) a.push('--count', kv.count)
+      if (kv.find) {
+        // find=text:… → 先 scan 找候选，再按中心点点击
+        const target = String(kv.find).replace(/^text:/i, '')
+        return { findClick: { window: win, text: target } }
+      }
+      return { fn: cmdClick, args: a }
+    }
+    if (verb === 'type') return { fn: cmdType, args: ['--text', kv.text !== undefined ? kv.text : bare.join(' ')] }
+    if (verb === 'key') return { fn: cmdKey, args: ['--combo', kv.combo || bare.join('')] }
+    if (verb === 'paste') return { fn: cmdPaste, args: ['--text', kv.text !== undefined ? kv.text : bare.join(' ')] }
+    if (verb === 'scroll') {
+      const a = ['--delta', String(kv.delta || -3)]
+      if (kv.x) a.push('--x', kv.x)
+      if (kv.y) a.push('--y', kv.y)
+      if (kv.horizontal) a.push('--horizontal')
+      return { fn: cmdScroll, args: a }
+    }
+    if (verb === 'drag') return { fn: cmdDrag, args: ['--from', kv.from || '', '--to', kv.to || ''] }
+    if (verb === 'wait') {
+      // macOS 侧只做"等一小会儿"：没有跨进程的 UI 事件源，条件等待用 sleep 近似
+      return { sleep: Number(kv.timeout || 800) }
+    }
+    return { unknown: verb }
+  }
+
+  const lines = String(text).split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i].trim()
+    if (!raw || raw.startsWith('#')) continue
+    const { verb, kv, bare } = parseLine(raw)
+    const plan = callFor(verb, kv, bare)
+    if (!plan) {
+      trace.push({ line: i + 1, verb, ok: true, note: 'window=' + current })
+      continue
+    }
+    if (plan.sleep) {
+      await new Promise((r) => setTimeout(r, Math.max(0, Math.min(10000, plan.sleep))))
+      trace.push({ line: i + 1, verb, ok: true, note: `sleep ${plan.sleep}ms` })
+      continue
+    }
+    if (plan.unknown) {
+      trace.push({ line: i + 1, verb, ok: false, code: 'UNKNOWN_VERB' })
+      if (!keepGoing) {
+        emit({ ok: false, code: 'SCRIPT_FAILED', line: i + 1, trace })
+        return 4
+      }
+      continue
+    }
+    let res
+    if (plan.findClick) {
+      // click find=text:…：扫一遍，按文本子串找候选中心
+      const list = await listWindows()
+      const win = pickWindow(list, plan.findClick.window || '')
+      if (!win) {
+        res = { ok: false, code: 'WINDOW_NOT_FOUND' }
+      } else {
+        const cands = await axCandidates(win.pid)
+        const hit = cands.find((c) => String(c.name || '').includes(plan.findClick.text))
+        if (!hit) res = { ok: false, code: 'CANDIDATE_NOT_FOUND' }
+        else res = { ok: true, clickedAt: { x: Math.round(hit.x + hit.w / 2), y: Math.round(hit.y + hit.h / 2) }, text: hit.name }
+      }
+    } else {
+      // 内部命令会直接写 stdout；这里截获它，避免污染脚本的最终 JSON
+      res = await captureEmit(plan.fn, plan.args)
+    }
+    const okLine = res && res.ok !== false
+    trace.push({ line: i + 1, verb, ok: okLine, code: res && res.code, note: raw.slice(0, 80) })
+    if (!okLine && !keepGoing) {
+      emit({ ok: false, code: 'SCRIPT_FAILED', line: i + 1, trace, last: res })
+      return 4
+    }
+  }
+  emit({ ok: true, steps: trace.length, trace, notes: ['engine=mac'] })
+  return 0
+}
+
+/** 临时接管 emit，捕获内部命令的 JSON 结果（脚本模式下不要把它写到 stdout）。 */
+async function captureEmit(fn, args) {
+  const real = process.stdout.write.bind(process.stdout)
+  let buf = ''
+  process.stdout.write = (chunk) => {
+    buf += String(chunk)
+    return true
+  }
+  try {
+    await fn(args || [])
+  } catch (e) {
+    buf += JSON.stringify({ ok: false, error: String(e && e.message) })
+  } finally {
+    process.stdout.write = real
+  }
+  try {
+    return JSON.parse(buf.trim() || '{}')
+  } catch {
+    return { ok: false, code: 'BAD_OUTPUT', raw: buf.slice(0, 400) }
+  }
 }
 
 async function cmdHud() {
@@ -808,7 +1187,16 @@ const USAGE = `engine-mac.mjs — Lens 的 macOS 引擎（实验性）
   node engine-mac.mjs vision --mode cells [--cells 9] [--rect x,y,w,h | --window 名称] [--path 7.4] --out png
   node engine-mac.mjs hud            # 固定返回 HUD_UNAVAILABLE
 
-未实现：scroll / drag / 遮挡检测，返回 NOT_IMPLEMENTED。
+  node engine-mac.mjs scroll --delta -3 [--x X --y Y] [--horizontal]
+  node engine-mac.mjs drag --from x,y --to x,y [--duration 600]
+  node engine-mac.mjs verify [--window 名称]     # 与上一张快照做像素差分
+  node engine-mac.mjs run --text "window 微信
+    focus
+    key combo=cmd+f
+    type text=张三
+    key combo=enter" [--continue]
+
+未实现：遮挡检测（用 check 的 covered 代替）。
 需要授权：系统设置 → 隐私与安全性 → 辅助功能、屏幕录制。`
 
 async function main() {
@@ -840,11 +1228,16 @@ async function main() {
       return cmdCap(argv)
     case 'vision':
       return cmdVision(argv)
+    case 'run':
+      return cmdRun(argv)
     case 'hud':
       return cmdHud(argv)
     case 'scroll':
+      return cmdScroll(argv)
     case 'drag':
+      return cmdDrag(argv)
     case 'verify':
+      return cmdVerify(argv)
     case 'wait':
       return cmdUnsupported(cmd)
     default:
@@ -864,4 +1257,20 @@ if (invokedDirectly) {
     })
 }
 
-export { decodePng, encodePng, fillRect, strokeRect, pixelAt, drawText, bestGrid, splitCells, scaleNearest, renderCells }
+export {
+  windowAtPoint,
+  decodePng,
+  encodePng,
+  fillRect,
+  strokeRect,
+  pixelAt,
+  drawText,
+  bestGrid,
+  splitCells,
+  scaleNearest,
+  renderCells,
+  cropRect,
+  diffImages,
+  pngSize,
+  parseScriptLine,
+}

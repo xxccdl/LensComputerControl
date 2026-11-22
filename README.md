@@ -97,7 +97,10 @@ macOS 上没有 Win32/UIA，`lens.exe` 跑不了，于是另带一个**零依赖
 | 坐标检验 `computer_check` | GDI+ 绘制 | Node 内解 PNG + 画框 + 最近邻放大（自己实现编解码） |
 | 切块定位 `computer_vision` | 引擎绘制分格图 | 同样支持，`cells` 模式带编号与坐标 |
 | 点击 / 输入 / 按键 / 粘贴 | SendInput / PostMessage / 剪贴板 | System Events `click at`、`keystroke`、`pbcopy + cmd+v`（粘完写回原剪贴板） |
-| 滚动 / 拖动 / 遮挡检测 | ✔ | **未实现**，返回 `NOT_IMPLEMENTED` |
+| 滚动 / 拖动 | ✔ | ✔ `CGEventCreateScrollWheelEvent` / 按下-移动-抬起 |
+| 像素差分核验 `verify` | ✔ | ✔ 与上一张快照比，额外给 `hoverSuspected`（只变一小块时提示"可能是悬停"） |
+| 遮挡检测 | WindowFromPoint | ✔ `CGWindowListCopyWindowInfo` 按层级顺序判最上层窗口 |
+| 脚本编排 `computer_run` | ✔ 引擎内解释 | ✔ 引擎内解释（window/focus/click/type/key/paste/scroll/drag/wait/sleep） |
 | HUD 浮层（蓝边+胶囊） | `lenshud.exe` | 无（Web 面板状态卡照常） |
 
 启用步骤：
@@ -113,7 +116,7 @@ node engine-mac.mjs scan --window Safari --overlay /tmp/scan.png
 node engine-mac.mjs vision --mode cells --cells 9 --out /tmp/cells.png
 ```
 
-已知限制：AX 树在 Electron / Qt / 游戏里通常为空，这类窗口只能靠 `computer_vision` 切块 + `computer_check` 预览；候选 id 点击暂未实现（用 scan 给的 `cx,cy`）。
+已知限制：AX 树在 Electron / Qt / 游戏里通常为空，这类窗口只能靠 `computer_vision` 切块 + `computer_check` 预览。没有内置 OCR 通道（Windows 侧用 WinRT OCR），所以 `computer_look mode:"text"` 在 macOS 上走不通，改用 `scan` 的 AX 文本或 `vision` 切块。
 
 ## 已知限制
 

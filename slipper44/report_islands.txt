@@ -1,0 +1,12 @@
+size7 100%     band L                      z   0.00..  5.60  tris=  3106
+               down-facing area   11578.0 mm2 | on bed   11578.0 (100.0%) | suspended       0.0 ( 0.0%)
+               suspended underside starts at z >= 0.60 mm (mean 0.60)
+size7 100%     footbed L (slide-11 .L.stl)  z   0.00.. 16.50  tris=200860
+               down-facing area   18691.8 mm2 | on bed   13301.8 (71.2%) | suspended    5390.1 (28.8%)
+               suspended underside starts at z >= 0.47 mm (mean 1.28)
+EU44 115.79%   band L                      z   0.00..  6.48  tris=  3106
+               down-facing area   15523.0 mm2 | on bed   15523.0 (100.0%) | suspended       0.0 ( 0.0%)
+               suspended underside starts at z >= 0.69 mm (mean 0.69)
+EU44 115.79%   footbed L (slide-11 .L.stl)  z   0.00.. 19.11  tris=200860
+               down-facing area   25060.8 mm2 | on bed   17834.1 (71.2%) | suspended    7226.7 (28.8%)
+               suspended underside starts at z >= 0.55 mm (mean 1.49)

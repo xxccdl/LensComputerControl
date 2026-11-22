@@ -680,9 +680,14 @@ export function apply(ctx, config) {
         if (value.verify) {
           if (!value.verify.changed) {
             lines.push('核验：画面没变化（changed=false）——这一下可能没生效，换策略而不是重复点')
+          } else if (value.verify.hoverSuspected) {
+            // 变化只局限在一小块 → 典型是鼠标悬停高亮，几乎肯定不是"点成功"
+            const box = value.verify.box ? `（变化区域约 ${value.verify.box.w}x${value.verify.box.h}）` : ''
+            lines.push(`核验：只有一小块像素变了${box}，**大概率只是悬停高亮或光标闪烁，不是动作生效**。`)
+            lines.push('换判据：computer_look 看内容，或 computer_scan 看有没有出现预期的候选。')
           } else {
             // 像素差分只能证明"画过东西"，证明不了"点对了"：鼠标悬停本身就会改像素。
-            lines.push('核验：画面有变化（changed=true）—— 注意这只说明界面重绘过，**不等于点对了**：悬停高亮、光标闪烁都会让它变。')
+            lines.push(`核验：画面有变化（changed=true，比例 ${value.verify.ratio ?? '?'}）—— 这只说明界面重绘过，**不等于点对了**。`)
             lines.push('要确认结果，用 computer_look 看内容，或 computer_scan 看有没有出现预期的候选。')
           }
         }
